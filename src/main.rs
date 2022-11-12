@@ -7,13 +7,10 @@ use std::ops::Deref;
 use std::sync::Arc;
 use futures::{
     FutureExt,
-    StreamExt,
-    channel::mpsc::{Receiver, Sender},
     select,
 };
-use futures::channel::{mpsc, oneshot};
+use futures::channel::{mpsc};
 use futures::lock::Mutex;
-use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use log::{debug, info, trace};
 use serde::{Serialize, Deserialize};
 use tokio::net::{TcpListener, TcpStream};
@@ -22,14 +19,6 @@ use pipe::Pipe;
 use packet::{Direction, PacketProcessor, Packet};
 use crate::postgresql::PostgresqlProcessor;
 
-
-pub struct ServerInfo {
-    server_addr: String
-}
-
-pub struct BindInfo {
-    bind_addr: String
-}
 
 pub struct PacketRules {
     bind_addr: String,
@@ -82,7 +71,7 @@ impl RewriteReverseProxy {
         db_addr: String,
         mut client_socket: TcpStream,
         handler_ref: Arc<Mutex<T>>,
-        kill_switch_receiver: oneshot::Receiver<()>,
+        // kill_switch_receiver: oneshot::Receiver<()>,
     ) {
         let client_addr = match client_socket.peer_addr() {
             Ok(addr) => addr.to_string(),
@@ -141,7 +130,7 @@ impl RewriteReverseProxy {
     pub async fn run(
         &mut self,
         // processor: T,
-        kill_switch_receiver: oneshot::Receiver<()>,
+        // kill_switch_receiver: oneshot::Receiver<()>,
     ) {
         trace!("RewriteReverseProxy.run - enter");
         let proxy = &self.proxies[0];
@@ -156,13 +145,13 @@ impl RewriteReverseProxy {
         loop {
             trace!("RewriteReverseProxy.run - loop");
             match listener.accept().await {
-                Ok((socket, addr)) => {
-                    let (tx, rx) = oneshot::channel();
+                Ok((socket, _addr)) => {
+                    // let (tx, rx) = oneshot::channel();
                     RewriteReverseProxy::create_pipes(
                         proxy.server_addr.clone(),
                         socket,
                         packet_handler.clone(),
-                        rx,
+                        // rx,
                     ).await;
                     info!("new client")
                 },
@@ -172,36 +161,18 @@ impl RewriteReverseProxy {
     }
 }
 
-struct PassthruPacketProcessor {
-
-}
-
-impl PacketProcessor for PassthruPacketProcessor {
-    fn parse(&self, packet_buf: &mut Vec<u8>) -> Option<Packet> {
-        todo!()
-    }
-
-    fn process_incoming(&self, packet: &Packet) -> Option<Packet> {
-        Some(packet.clone())
-    }
-
-    fn process_outgoing(&self, packet: &Packet) -> Option<Packet> {
-        Some(packet.clone())
-    }
-}
-
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    let (tx, rx) = oneshot::channel();
+    // let (_tx, rx) = oneshot::channel();
     let mut proxy = RewriteReverseProxy::new();
     // let processor = PassthruPacketProcessor {};
-    let processor = Box::new(postgresql::PostgresqlProcessor::passthru());
+    let processor = Box::new(PostgresqlProcessor::passthru());
     let rules = PacketRules {
         bind_addr: "0.0.0.0:6432".to_string(),
         server_addr: "0.0.0.0:5432".to_string(),
         processor,
     };
     proxy.add_proxy(Box::new(rules)).await;
-    proxy.run( rx).await;
+    proxy.run().await;
 }

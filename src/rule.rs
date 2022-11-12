@@ -9,10 +9,10 @@ type Encoder<T> = fn(&T) -> Packet;
 
 #[derive(Clone)]
 pub struct PrewRuleSet<T> {
-    parser: Parser<T>,
-    filter: Filter<T>,
-    transformer: Transformer<T>,
-    encoder: Encoder<T>,
+    pub parser: Parser<T>,
+    pub filter: Filter<T>,
+    pub transformer: Transformer<T>,
+    pub encoder: Encoder<T>,
     // router: Router<T>
 }
 

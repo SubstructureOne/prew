@@ -1,16 +1,14 @@
-use byteorder::{BigEndian, ByteOrder};
 use futures::{
     channel::mpsc::{Receiver, Sender},
     lock::Mutex,
     select,
-    sink::SinkExt,
     FutureExt, StreamExt,
 };
 use std::{
     io::{Error, ErrorKind},
     sync::Arc,
 };
-use log::{debug, trace, warn};
+use log::{trace, warn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, Result};
 use crate::packet::{Direction, Packet, PacketProcessor};
 
@@ -42,7 +40,7 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
 
     pub async fn run(
         &mut self,
-        mut other_pipe_sender: Sender<Packet>,
+        _other_pipe_sender: Sender<Packet>,
         other_pipe_receiver: Receiver<Packet>,
     ) -> Result<()> {
         trace!("[{}]: Running {:?} pipe loop...", self.name, self.direction);
@@ -63,7 +61,7 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
                         &read_buf,
                         &mut packet_buf,
                         &mut write_buf,
-                        &mut other_pipe_sender
+                        // &mut other_pipe_sender
                     ).await?;
                 },
                 // Support short-circuit
@@ -88,7 +86,7 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
         read_buf: &[u8],
         mut packet_buf: &mut Vec<u8>,
         write_buf: &mut Vec<u8>,
-        other_pipe_sender: &mut Sender<Packet>,
+        // other_pipe_sender: &mut Sender<Packet>,
     ) -> Result<()> {
         if let Ok(n) = read_result {
             if n == 0 {
@@ -105,7 +103,7 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
 
             // Process all packets in packet_buf, put into write_buf
             loop {
-                let mut transformed_packet: Option<Packet> = None;
+                let transformed_packet: Option<Packet>;
                 {
                     // Scope for self.packet_handler Mutex
                     let h = self.packet_handler.lock().await;
@@ -158,9 +156,9 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
         }
     }
 
-    fn debug(&self, string: String) {
-        debug!("[{}:{:?}]: {}", self.name, self.direction, string);
-    }
+    // fn debug(&self, string: String) {
+    //     debug!("[{}:{:?}]: {}", self.name, self.direction, string);
+    // }
 
     fn trace(&self, string: String) {
         trace!("[{}:{:?}]: {}", self.name, self.direction, string);
