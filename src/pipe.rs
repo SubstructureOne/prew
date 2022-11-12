@@ -1,8 +1,7 @@
 use futures::{
-    channel::mpsc::{Receiver, Sender},
     lock::Mutex,
     select,
-    FutureExt, StreamExt,
+    FutureExt,
 };
 use std::{
     io::{Error, ErrorKind},
@@ -40,13 +39,10 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
 
     pub async fn run(
         &mut self,
-        _other_pipe_sender: Sender<Packet>,
-        other_pipe_receiver: Receiver<Packet>,
     ) -> Result<()> {
         trace!("[{}]: Running {:?} pipe loop...", self.name, self.direction);
         //let source = Arc::get_mut(&mut self.source).unwrap();
         //let sink = Arc::get_mut(&mut self.sink).unwrap();
-        let mut other_pipe_receiver = other_pipe_receiver.into_future().fuse();
         let mut read_buf: Vec<u8> = vec![0_u8; 4096];
         let mut packet_buf: Vec<u8> = Vec::with_capacity(4096);
         let mut write_buf: Vec<u8> = Vec::with_capacity(4096);
@@ -65,10 +61,6 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
                     ).await?;
                 },
                 // Support short-circuit
-                (packet, recv) = other_pipe_receiver => {
-                    self.process_short_circuit(packet, &mut write_buf)?;
-                    other_pipe_receiver = recv.into_future().fuse();
-                },
             } // end select!
 
             // Write all to sink
@@ -138,21 +130,6 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
             Err(e)
         } else {
             Err(Error::new(ErrorKind::Other, "This should never happen"))
-        }
-    }
-
-    fn process_short_circuit(&self, packet: Option<Packet>, write_buf: &mut Vec<u8>) -> Result<()> {
-        if let Some(p) = packet {
-            self.trace(format!(
-                "Got short circuit packet of {} bytes",
-                p.get_size()
-            ));
-            write_buf.extend_from_slice(&p.bytes);
-            Ok(())
-        } else {
-            let e = self.create_error("other_pipe_receiver prematurely closed".to_string());
-            warn!("{}", e.to_string());
-            Err(e)
         }
     }
 

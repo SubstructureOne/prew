@@ -7,10 +7,6 @@ impl Packet {
     pub fn new(bytes: Vec<u8>) -> Packet {
         Packet { bytes }
     }
-
-    pub fn get_size(&self) -> usize {
-        self.bytes.len()
-    }
 }
 
 pub trait PacketProcessor {

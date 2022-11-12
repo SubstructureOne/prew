@@ -9,14 +9,13 @@ use futures::{
     FutureExt,
     select,
 };
-use futures::channel::{mpsc};
 use futures::lock::Mutex;
 use log::{debug, info, trace};
 use serde::{Serialize, Deserialize};
 use tokio::net::{TcpListener, TcpStream};
 
 use pipe::Pipe;
-use packet::{Direction, PacketProcessor, Packet};
+use packet::{Direction, PacketProcessor};
 use crate::postgresql::PostgresqlProcessor;
 
 
@@ -103,20 +102,15 @@ impl RewriteReverseProxy {
                 client_writer,
             );
 
-            // Create channels to short-circuit at the proxy
-            // - tx: use to send directly to other's sink
-            // - rx: receive and directly dump into sink
-            let (fb_tx, fb_rx) = mpsc::channel::<Packet>(128);
-            let (bf_tx, bf_rx) = mpsc::channel::<Packet>(128);
             trace!("Server.create_pipes: starting forward/backwards pipes");
             // select! will continuously run all futures until one returns
             // - pipes are infinite loops, and never expect to exit unless error
             // - any return will close this connection
             select! {
-                _ = forward_pipe.run(fb_tx, bf_rx).fuse() => {
+                _ = forward_pipe.run().fuse() => {
                     trace!("Pipe closed via forward pipe");
                 },
-                _ = backward_pipe.run(bf_tx, fb_rx).fuse() => {
+                _ = backward_pipe.run().fuse() => {
                     trace!("Pipe closed via backward pipe");
                 },
                 // msg = kill_switch_receiver.fuse() => {

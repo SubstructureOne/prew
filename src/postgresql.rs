@@ -110,9 +110,15 @@ impl StartupMessage {
     pub fn new(bytes: &Vec<u8>) -> StartupMessage {
         let length = BigEndian::read_u32(&bytes[0..4]);
         let protocol_version = BigEndian::read_u32(&bytes[4..8]);
-        let strings: Vec<&[u8]> = bytes.split(|chr| *chr == 0).collect();
-        if strings.len() % 2 != 1 || strings[strings.len()-1].len() != 0 {
-            panic!("Bad parameter values");
+        let strings: Vec<&[u8]> = bytes[8..bytes.len()].split(|chr| *chr == 0).collect();
+        if strings.len() % 2 != 0 || strings[strings.len()-1].len() != 0 {
+            panic!(
+                "Bad parameter values: {:?}",
+                strings
+                    .iter()
+                    .map(|chars| String::from_utf8_lossy(chars).into())
+                    .collect::<Vec<String>>()
+            );
         }
         let mut string_ind = 0;
         let mut parameters: Vec<(String, String)> = vec![];
