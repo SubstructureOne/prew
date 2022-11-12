@@ -58,7 +58,13 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
                 // Read from the source to read_buf, append to packet_buf
                 read_result = self.source.read(&mut read_buf[..]).fuse() => {
                     //let n = self.source.read(&mut read_buf[..]).await?;
-                    self.process_read_buf(read_result, &read_buf, &mut packet_buf, &mut write_buf, &mut other_pipe_sender).await?;
+                    self.process_read_buf(
+                        read_result,
+                        &read_buf,
+                        &mut packet_buf,
+                        &mut write_buf,
+                        &mut other_pipe_sender
+                    ).await?;
                 },
                 // Support short-circuit
                 (packet, recv) = other_pipe_receiver => {
@@ -99,24 +105,30 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
 
             // Process all packets in packet_buf, put into write_buf
             loop {
-                let transformed_packet: Option<Packet> = None;
+                let mut transformed_packet: Option<Packet> = None;
                 {
                     // Scope for self.packet_handler Mutex
                     let h = self.packet_handler.lock().await;
                     if let Some(packet) = h.parse(&mut packet_buf) {
                         self.trace("Processing packet".to_string());
-                        let transformed_packet: Option<Packet>;
                         transformed_packet = match self.direction {
                             Direction::Forward => h.process_incoming(&packet),
                             Direction::Backward => h.process_outgoing(&packet),
                         };
+                        self.trace(format!("Transformed packet: {:?}", transformed_packet));
                     } else {
                         break;
                     }
                 }
+                self.trace(format!("Matching packet: {:?}", transformed_packet));
                 match transformed_packet {
-                    Some(packet) => write_buf.extend_from_slice(&packet.bytes),
-                    None => {}
+                    Some(packet) => {
+                        self.trace(format!("Adding {} bytes to write buffer", packet.bytes.len()));
+                        write_buf.extend_from_slice(&packet.bytes)
+                    },
+                    None => {
+                        self.trace(format!("No packet found"));
+                    }
                 }
             }
             Ok(())
