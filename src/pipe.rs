@@ -110,7 +110,6 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
                         break;
                     }
                 }
-                self.trace(format!("Matching packet: {:?}", transformed_packet));
                 match transformed_packet {
                     Some(packet) => {
                         self.trace(format!("Adding {} bytes to write buffer", packet.bytes.len()));
