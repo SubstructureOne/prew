@@ -16,3 +16,10 @@ pg_query = { git = "https://github.com/SubstructureOne/pg_query.rs.git", branch 
 toml = "0.5.9"
 
 
+[lib]
+name = "prew"
+path = "src/lib.rs"
+
+[[bin]]
+name = "prew"
+path = "src/main.rs"
