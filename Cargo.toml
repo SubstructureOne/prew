@@ -7,11 +7,12 @@ edition = "2021"
 
 [dependencies]
 byteorder = "1.4.3"
-confy = "0.5.1"
 env_logger = "0.9.1"
 futures = "0.3.25"
 log = "0.4.17"
 serde = { version = "1.0.147", features = ["derive"] }
 tokio = { version = "1.21.2", features = ["full"]}
 pg_query = { git = "https://github.com/SubstructureOne/pg_query.rs.git", branch = "pg-14" }
+toml = "0.5.9"
+
 

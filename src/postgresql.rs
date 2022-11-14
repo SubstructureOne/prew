@@ -76,7 +76,7 @@ pub struct PostgresqlProcessor<X> where X : PacketTransformer {
 }
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StartupMessage {
     // username: String,
     // database: String,
@@ -212,7 +212,7 @@ impl<T> PacketTransformer for IdentityTransformer<T> where T : Clone {
 }
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct QueryMessage {
     query: String,
 }
@@ -252,7 +252,7 @@ impl Encodable for QueryMessage {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OtherMessage {
     bytes: Vec<u8>
 }
@@ -275,7 +275,7 @@ impl Encodable for OtherMessage {
 }
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum PostgresqlPacket {
     Startup(StartupMessage),
     Query(QueryMessage),
