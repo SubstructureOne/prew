@@ -15,37 +15,36 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::pipe::Pipe;
 use packet::{Direction, PacketProcessor};
 pub use crate::postgresql::{PostgresqlPacket, PostgresqlProcessor};
-use crate::rule::PacketTransformer;
 
 
-pub struct PacketRules<X> where X : PacketTransformer {
+pub struct PacketRules<P : PacketProcessor> {
     pub bind_addr: String,
     pub server_addr: String,
-    pub processor: PostgresqlProcessor<X>,
+    pub processor: P,
 }
 
 
 
-pub struct ProtocolProxy<X> where X : PacketTransformer {
+pub struct ProtocolProxy<P : PacketProcessor + Clone> {
     server_addr: String,
     listener: TcpListener,
-    processor: PostgresqlProcessor<X>,
+    processor: P,
 }
 
 
-pub struct RewriteReverseProxy<X>  where X : PacketTransformer {
-    proxies: Vec<Box<ProtocolProxy<X>>>,
+pub struct RewriteReverseProxy<P : PacketProcessor + Clone> {
+    proxies: Vec<Box<ProtocolProxy<P>>>,
 }
 
 
-impl<X> RewriteReverseProxy<X> where X : PacketTransformer<PacketType=PostgresqlPacket> + Send + Sync + Clone  + 'static {
-    pub fn new() -> RewriteReverseProxy<X> {
+impl<P> RewriteReverseProxy<P> where P : PacketProcessor + Clone + Sync + Send + 'static {
+    pub fn new() -> RewriteReverseProxy<P> {
         RewriteReverseProxy {
             proxies: vec![]
         }
     }
 
-    pub async fn add_proxy(&mut self, rules: Box<PacketRules<X>>) {
+    pub async fn add_proxy(&mut self, rules: Box<PacketRules<P>>) {
         let proxy = ProtocolProxy {
             server_addr: rules.server_addr,
             processor: rules.processor,
@@ -131,7 +130,7 @@ impl<X> RewriteReverseProxy<X> where X : PacketTransformer<PacketType=Postgresql
             match listener.accept().await {
                 Ok((socket, _addr)) => {
                     // let (tx, rx) = oneshot::channel();
-                    RewriteReverseProxy::<X>::create_pipes(
+                    RewriteReverseProxy::<P>::create_pipes(
                         proxy.server_addr.clone(),
                         socket,
                         packet_handler.clone(),

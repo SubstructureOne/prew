@@ -4,26 +4,50 @@ use byteorder::{BigEndian, ByteOrder};
 use log::{trace};
 
 use crate::{
-    packet::{Packet, PacketProcessor},
+    packet::{Packet},
     rule::PrewRuleSet,
     rule::PacketTransformer,
 };
+use crate::packet::PacketProcessor;
+use crate::rule::{NoFilter, NoTransform, Parser, Encodable, MessageEncoder, Transformer};
+use crate::rule::{Encoder, Filter};
 
 pub const POSTGRES_IDS: [char; 31] = [
     'R', 'K', 'B', '2', '3', 'C', 'd', 'c', 'f', 'G', 'H', 'W', 'D', 'I', 'E', 'F', 'V', 'p', 'v',
     'n', 'N', 'A', 't', 'S', 'P', '1', 's', 'Q', 'Z', 'T', 'X',
 ];
 
-pub trait Encodable {
-    fn encode(&self) -> Packet;
+
+#[derive(Clone)]
+pub struct PostgresParser {}
+impl Parser<PostgresqlPacket> for PostgresParser {
+    fn parse(&self, packet: &Packet) -> PostgresqlPacket {
+        let packet_type = packet.bytes[0] as char;
+        if POSTGRES_IDS.contains(&packet_type) {
+            if packet_type == 'Q' {
+                PostgresqlPacket::Query(QueryMessage::new(&packet.bytes))
+            } else {
+                PostgresqlPacket::Other(OtherMessage::new(&packet.bytes))
+            }
+        } else {
+            if packet.bytes.len() >= 8
+                && BigEndian::read_u32(&packet.bytes[4..8]) == 196_608
+            {
+                // startup message
+                PostgresqlPacket::Startup(StartupMessage::new(&packet.bytes))
+            } else {
+                PostgresqlPacket::Other(OtherMessage::new(&packet.bytes))
+            }
+        }
+    }
 }
 
-pub fn read_postgresql_packet(packet_buf: &mut Vec <u8>) -> Option<Packet> {
+pub fn read_postgresql_packet(packet_buf: &mut Vec<u8>) -> Option<Packet> {
     if packet_buf.is_empty() {
         trace!(
-            "parse_postgresql_packet: FAIL packet_buf(size={}) trying to read first byte",
-            packet_buf.len()
-        );
+                "parse_postgresql_packet: FAIL packet_buf(size={}) trying to read first byte",
+                packet_buf.len()
+            );
         return None;
     }
     let id = packet_buf[0] as char;
@@ -35,9 +59,9 @@ pub fn read_postgresql_packet(packet_buf: &mut Vec <u8>) -> Option<Packet> {
     // Check if I can read the length field
     if packet_buf.len() < (size + 4) {
         trace!(
-            "parse_postgresql_packet: FAIL packet_buf(size={}) trying to read length, firstbyte={:#04x}={}, size={}",
-            packet_buf.len(), packet_buf[0], id, size+4
-        );
+                "parse_postgresql_packet: FAIL packet_buf(size={}) trying to read length, firstbyte={:#04x}={}, size={}",
+                packet_buf.len(), packet_buf[0], id, size+4
+            );
         return None;
     }
     let length = BigEndian::read_u32(&packet_buf[size..(size + 4)]) as usize; // read length
@@ -46,9 +70,9 @@ pub fn read_postgresql_packet(packet_buf: &mut Vec <u8>) -> Option<Packet> {
     // Check if don't have entire packet
     if packet_buf.len() < size {
         trace!(
-            "FAIL packet_buf(size={}) too small, firstbyte={:#04x}={}, size={}, length={}",
-            packet_buf.len(), packet_buf[0], id, size, length
-        );
+                "FAIL packet_buf(size={}) too small, firstbyte={:#04x}={}, size={}, length={}",
+                packet_buf.len(), packet_buf[0], id, size, length
+            );
         return None;
     }
     trace!(
@@ -65,14 +89,13 @@ pub fn read_postgresql_packet(packet_buf: &mut Vec <u8>) -> Option<Packet> {
 }
 
 
-
-pub fn encode_postgresql_packet(pgpacket: &PostgresqlPacket) -> Packet {
-    pgpacket.encode()
-}
-
 #[derive(Clone)]
-pub struct PostgresqlProcessor<X> where X : PacketTransformer {
-    rules: PrewRuleSet<PostgresqlPacket, X>
+pub struct PostgresqlProcessor<
+    F: Filter<PostgresqlPacket> + Clone,
+    X: Transformer<PostgresqlPacket> + Clone,
+    E: Encoder<PostgresqlPacket> + Clone
+> {
+    rules: PrewRuleSet<PostgresqlPacket,PostgresParser,F,X,E>
 }
 
 
@@ -182,9 +205,7 @@ pub struct AppendDbNameTransformer {
     append: String
 }
 
-impl PacketTransformer for AppendDbNameTransformer {
-    type PacketType = PostgresqlPacket;
-
+impl Transformer<PostgresqlPacket> for AppendDbNameTransformer {
     fn transform(&self, packet: &PostgresqlPacket) -> PostgresqlPacket {
         if let PostgresqlPacket::Startup(message) = packet {
             let mut newdbname = message.get_parameter("database").unwrap();
@@ -283,8 +304,8 @@ pub enum PostgresqlPacket {
 }
 
 
-impl PostgresqlPacket {
-    pub fn encode(&self) -> Packet {
+impl Encodable for PostgresqlPacket {
+    fn encode(&self) -> Packet {
         match self {
             PostgresqlPacket::Startup(message) => message.encode(),
             PostgresqlPacket::Query(message) => message.encode(),
@@ -293,73 +314,80 @@ impl PostgresqlPacket {
     }
 }
 
-pub fn parse_postgresql_packet(packet: &Packet) -> PostgresqlPacket {
-    let packet_type = packet.bytes[0] as char;
-    if POSTGRES_IDS.contains(&packet_type) {
-        if packet_type == 'Q' {
-            PostgresqlPacket::Query(QueryMessage::new(&packet.bytes))
-        } else {
-            PostgresqlPacket::Other(OtherMessage::new(&packet.bytes))
-        }
-    } else {
-        if packet.bytes.len() >= 8
-            && BigEndian::read_u32(&packet.bytes[4..8]) == 196_608
-        {
-            // startup message
-            PostgresqlPacket::Startup(StartupMessage::new(&packet.bytes))
-        } else {
-            PostgresqlPacket::Other(OtherMessage::new(&packet.bytes))
-        }
-    }
-}
 
-impl<X> PostgresqlProcessor<X> where X : PacketTransformer {
-    pub fn new(rules: PrewRuleSet<PostgresqlPacket, X>) -> PostgresqlProcessor<X> {
+
+impl<F,X,E> PostgresqlProcessor<F,X,E> where
+        F : Filter<PostgresqlPacket> + Clone,
+        X : Transformer<PostgresqlPacket> + Clone,
+        E : Encoder<PostgresqlPacket> + Clone
+{
+    pub fn new(rules: PrewRuleSet<PostgresqlPacket, PostgresParser, F, X, E>) -> PostgresqlProcessor<F, X, E> {
         PostgresqlProcessor { rules }
     }
-
-
 }
 
-impl PostgresqlProcessor<IdentityTransformer<PostgresqlPacket>> {
-    pub fn passthru() -> PostgresqlProcessor<IdentityTransformer<PostgresqlPacket>> {
-        let transformer = IdentityTransformer{packet_type: PhantomData};
+impl PostgresqlProcessor<
+        NoFilter<PostgresqlPacket>,
+        NoTransform<PostgresqlPacket>,
+        MessageEncoder<PostgresqlPacket>
+> {
+    pub fn passthru() -> PostgresqlProcessor<
+        NoFilter<PostgresqlPacket>,
+        NoTransform<PostgresqlPacket>,
+        MessageEncoder<PostgresqlPacket>,
+    > {
+        let transformer = NoTransform::new();
+        let parser = PostgresParser {};
+        let filter = NoFilter::new();
+        let encoder = MessageEncoder::<PostgresqlPacket>::new();
         PostgresqlProcessor::new(
             PrewRuleSet::new(
-                parse_postgresql_packet,
-                |_pkt| true,
-                transformer,
-                encode_postgresql_packet,
+                &parser,
+                &filter,
+                &transformer,
+                &encoder,
             )
         )
     }
 }
 
-impl PostgresqlProcessor<AppendDbNameTransformer> {
-    pub fn appenddbname<S : Into<String>>(append: S) -> PostgresqlProcessor<AppendDbNameTransformer> {
+impl PostgresqlProcessor<NoFilter<PostgresqlPacket>, AppendDbNameTransformer, MessageEncoder<PostgresqlPacket>> {
+    pub fn appenddbname<S: Into<String>>(append: S) -> PostgresqlProcessor<
+        NoFilter<PostgresqlPacket>,
+        AppendDbNameTransformer,
+        MessageEncoder<PostgresqlPacket>
+    > {
         let appender = AppendDbNameTransformer { append: append.into() };
+        let parser = PostgresParser {};
+        let filter = NoFilter::new();
+        let encoder = MessageEncoder::new();
         PostgresqlProcessor::new(
             PrewRuleSet::new(
-                parse_postgresql_packet,
-                |_pkt| true,
-                appender,
-                encode_postgresql_packet,
+                &parser,
+                &filter,
+                &appender,
+                &encoder,
             )
         )
     }
 }
 
-impl<X> PacketProcessor for PostgresqlProcessor<X> where X : PacketTransformer<PacketType=PostgresqlPacket> {
+impl<F,X,E> PacketProcessor for PostgresqlProcessor<F,X,E> where
+    F : Filter<PostgresqlPacket> + Clone,
+    X : Transformer<PostgresqlPacket> + Clone,
+    E : Encoder<PostgresqlPacket> + Clone
+{
+
     fn parse(&self, packet_buf: &mut Vec<u8>) -> Option<Packet> {
         return read_postgresql_packet(packet_buf);
     }
 
     fn process_incoming(&self, packet: &Packet) -> Option<Packet> {
         let rules = &self.rules;
-        let parsed = (rules.parser)(packet);
-        if (rules.filter)(&parsed) {
+        let parsed = rules.parser.parse(packet);
+        if rules.filter.filter(&parsed) {
             let transformed = rules.transformer.transform(&parsed);
-            let encoded = (rules.encoder)(&transformed);
+            let encoded = rules.encoder.encode(&transformed);
             Some(encoded)
         } else {
             None
