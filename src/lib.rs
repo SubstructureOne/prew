@@ -17,34 +17,34 @@ use packet::{Direction, PacketProcessor};
 pub use crate::postgresql::{PostgresqlPacket, PostgresqlProcessor};
 
 
-pub struct PacketRules<P : PacketProcessor> {
+pub struct PacketRules {
     pub bind_addr: String,
     pub server_addr: String,
-    pub processor: P,
+    pub processor: Arc<Mutex<dyn PacketProcessor + Send + Sync>>,
 }
 
 
 
-pub struct ProtocolProxy<P : PacketProcessor + Clone> {
+pub struct ProtocolProxy {
     server_addr: String,
     listener: TcpListener,
-    processor: P,
+    processor: Arc<Mutex<dyn PacketProcessor + Send + Sync>>,
 }
 
 
-pub struct RewriteReverseProxy<P : PacketProcessor + Clone> {
-    proxies: Vec<Box<ProtocolProxy<P>>>,
+pub struct RewriteReverseProxy {
+    proxies: Vec<Box<ProtocolProxy>>,
 }
 
 
-impl<P> RewriteReverseProxy<P> where P : PacketProcessor + Clone + Sync + Send + 'static {
-    pub fn new() -> RewriteReverseProxy<P> {
+impl RewriteReverseProxy where {
+    pub fn new() -> RewriteReverseProxy {
         RewriteReverseProxy {
             proxies: vec![]
         }
     }
 
-    pub async fn add_proxy(&mut self, rules: Box<PacketRules<P>>) {
+    pub async fn add_proxy(&mut self, rules: Box<PacketRules>) {
         let proxy = ProtocolProxy {
             server_addr: rules.server_addr,
             processor: rules.processor,
@@ -55,10 +55,10 @@ impl<P> RewriteReverseProxy<P> where P : PacketProcessor + Clone + Sync + Send +
         self.proxies.push(Box::new(proxy));
     }
 
-    async fn create_pipes<T: PacketProcessor + Send + Sync + 'static>(
+    async fn create_pipes(
         db_addr: String,
         mut client_socket: TcpStream,
-        handler_ref: Arc<Mutex<T>>,
+        handler_ref: Arc<Mutex<dyn PacketProcessor + Send + Sync>>,
         // kill_switch_receiver: oneshot::Receiver<()>,
     ) {
         let client_addr = match client_socket.peer_addr() {
@@ -118,7 +118,7 @@ impl<P> RewriteReverseProxy<P> where P : PacketProcessor + Clone + Sync + Send +
         trace!("RewriteReverseProxy.run - enter");
         let proxy = &self.proxies[0];
         let listener = &proxy.listener;
-        let packet_handler = Arc::new(Mutex::new(proxy.processor.clone()));
+        let packet_handler = proxy.processor.clone();
         // let packet_handler = Arc::new(Mutex::new(processor));
 
         // let incoming = self.proxies
@@ -130,7 +130,7 @@ impl<P> RewriteReverseProxy<P> where P : PacketProcessor + Clone + Sync + Send +
             match listener.accept().await {
                 Ok((socket, _addr)) => {
                     // let (tx, rx) = oneshot::channel();
-                    RewriteReverseProxy::<P>::create_pipes(
+                    RewriteReverseProxy::create_pipes(
                         proxy.server_addr.clone(),
                         socket,
                         packet_handler.clone(),

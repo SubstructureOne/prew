@@ -1,5 +1,5 @@
 use std::marker::PhantomData;
-use crate::packet::{Packet, PacketProcessor};
+use crate::packet::{Packet};
 
 pub trait Parser<T> {
     fn parse(&self, packet: &Packet) -> T;

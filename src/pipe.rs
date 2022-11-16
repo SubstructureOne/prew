@@ -14,7 +14,7 @@ use crate::packet::{Direction, Packet, PacketProcessor};
 
 pub struct Pipe<T: AsyncReadExt, U: AsyncWriteExt> {
     name: String,
-    packet_handler: Arc<Mutex<dyn PacketProcessor + Send>>,
+    packet_handler: Arc<Mutex<dyn PacketProcessor + Send + Sync>>,
     direction: Direction,
     source: T,
     sink: U,
@@ -23,7 +23,7 @@ pub struct Pipe<T: AsyncReadExt, U: AsyncWriteExt> {
 impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
     pub fn new(
         name: String,
-        packet_handler: Arc<Mutex<dyn PacketProcessor + Send>>,
+        packet_handler: Arc<Mutex<dyn PacketProcessor + Send + Sync>>,
         direction: Direction,
         reader: T,
         writer: U,
