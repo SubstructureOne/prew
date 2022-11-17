@@ -8,6 +8,7 @@ use futures::{
     FutureExt,
     select,
 };
+use futures::future::select_all;
 use log::{debug, info, trace};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -111,34 +112,33 @@ impl RewriteReverseProxy where {
 
     pub async fn run(
         &mut self,
-        // processor: T,
         // kill_switch_receiver: oneshot::Receiver<()>,
     ) {
         trace!("RewriteReverseProxy.run - enter");
-        let proxy = &self.proxies[0];
-        let listener = &proxy.listener;
-        let packet_handler = proxy.processor.clone();
-        // let packet_handler = Arc::new(Mutex::new(processor));
-
-        // let incoming = self.proxies
-        //     .iter()
-        //     .map(|proxy| proxy.listener.accept().fuse())
-        //     .collect();
+        let listeners = self.proxies.iter()
+            .map(|proxy| &proxy.listener)
+            .collect::<Vec<_>>();
+        let mut futures = listeners.iter()
+            .map(|listener| listener.accept().boxed())
+            .collect::<Vec<_>>();
         loop {
             trace!("RewriteReverseProxy.run - loop");
-            match listener.accept().await {
+            let (res, idx, remaining) = select_all(futures).await;
+            match res {
                 Ok((socket, _addr)) => {
                     // let (tx, rx) = oneshot::channel();
                     RewriteReverseProxy::create_pipes(
-                        proxy.server_addr.clone(),
+                        self.proxies[idx].server_addr.clone(),
                         socket,
-                        packet_handler.clone(),
+                        self.proxies[idx].processor.clone(),
                         // rx,
                     ).await;
                     info!("new client")
                 },
                 Err(e) => info!("couldn't get client: {}", e),
             }
+            futures = remaining;
+            futures.push(listeners[idx].accept().boxed());
         }
     }
 }
