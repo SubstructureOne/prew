@@ -1,5 +1,4 @@
 use futures::{
-    lock::Mutex,
     select,
     FutureExt,
 };
@@ -14,7 +13,7 @@ use crate::packet::{Direction, Packet, PacketProcessor};
 
 pub struct Pipe<T: AsyncReadExt, U: AsyncWriteExt> {
     name: String,
-    packet_handler: Arc<Mutex<dyn PacketProcessor + Send + Sync>>,
+    packet_handler: Arc<dyn PacketProcessor + Send + Sync>,
     direction: Direction,
     source: T,
     sink: U,
@@ -23,7 +22,7 @@ pub struct Pipe<T: AsyncReadExt, U: AsyncWriteExt> {
 impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
     pub fn new(
         name: String,
-        packet_handler: Arc<Mutex<dyn PacketProcessor + Send + Sync>>,
+        packet_handler: Arc<dyn PacketProcessor + Send + Sync>,
         direction: Direction,
         reader: T,
         writer: U,
@@ -98,7 +97,7 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
                 let transformed_packet: Option<Packet>;
                 {
                     // Scope for self.packet_handler Mutex
-                    let h = self.packet_handler.lock().await;
+                    let h = &self.packet_handler;
                     if let Some(packet) = h.parse(&mut packet_buf) {
                         self.trace("Processing packet".to_string());
                         transformed_packet = match self.direction {

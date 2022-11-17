@@ -4,7 +4,6 @@ use serde::{Serialize, Deserialize};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::sync::Arc;
-use futures::lock::Mutex;
 use log::{warn};
 
 use prew::{RewriteReverseProxy, PostgresqlProcessor, PacketRules};
@@ -82,7 +81,7 @@ async fn main() -> Result<(), Box<dyn Error>>{
         let rules = PacketRules {
             bind_addr: config.bind_addr,
             server_addr: config.server_addr,
-            processor: Arc::new(Mutex::new(processor)),
+            processor: Arc::new(processor),
         };
         proxy.add_proxy(Box::new(rules)).await;
         proxy.run().await;
@@ -92,7 +91,7 @@ async fn main() -> Result<(), Box<dyn Error>>{
         let rules = PacketRules {
             bind_addr: config.bind_addr,
             server_addr: config.server_addr,
-            processor: Arc::new(Mutex::new(processor)),
+            processor: Arc::new(processor),
         };
         proxy.add_proxy(Box::new(rules)).await;
         proxy.run().await;
