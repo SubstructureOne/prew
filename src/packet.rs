@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Packet {
     pub bytes: Vec<u8>,
@@ -10,9 +12,9 @@ impl Packet {
 }
 
 pub trait PacketProcessor {
-    fn parse(&self, packet_buf: &mut Vec<u8>) -> Option<Packet>;
-    fn process_incoming(&self, packet: &Packet) -> Option<Packet>;
-    fn process_outgoing(&self, packet: &Packet) -> Option<Packet>;
+    fn parse(&self, packet_buf: &mut Vec<u8>) -> Result<Option<Packet>>;
+    fn process_incoming(&self, packet: &Packet) -> Result<Option<Packet>>;
+    fn process_outgoing(&self, packet: &Packet) -> Result<Option<Packet>>;
 }
 
 

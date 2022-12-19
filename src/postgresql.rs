@@ -25,7 +25,7 @@ pub const POSTGRES_IDS: [char; 31] = [
 #[derive(Clone)]
 pub struct PostgresParser {}
 impl Parser<PostgresqlPacket> for PostgresParser {
-    fn parse(&self, packet: &Packet) -> PostgresqlPacket {
+    fn parse(&self, packet: &Packet) -> Result<PostgresqlPacket> {
         let packet_type = packet.bytes[0] as char;
         let info;
         if POSTGRES_IDS.contains(&packet_type) {
@@ -44,17 +44,18 @@ impl Parser<PostgresqlPacket> for PostgresParser {
                 info = PostgresqlPacketInfo::Other
             }
         }
-        PostgresqlPacket { bytes: Some(packet.bytes.clone()), info }
+        Ok(PostgresqlPacket::new(info, Some(packet.bytes.clone())))
     }
 }
 
-pub fn read_postgresql_packet(packet_buf: &mut Vec<u8>) -> Option<Packet> {
+pub fn read_postgresql_packet(packet_buf: &mut Vec<u8>) -> Result<Option<Packet>> {
+    // FIXME: Return Err instead of Ok if unable to parse
     if packet_buf.is_empty() {
         trace!(
                 "parse_postgresql_packet: FAIL packet_buf(size={}) trying to read first byte",
                 packet_buf.len()
             );
-        return None;
+        return Ok(None);
     }
     let id = packet_buf[0] as char;
     let mut size = 0;
@@ -68,7 +69,7 @@ pub fn read_postgresql_packet(packet_buf: &mut Vec<u8>) -> Option<Packet> {
                 "parse_postgresql_packet: FAIL packet_buf(size={}) trying to read length, firstbyte={:#04x}={}, size={}",
                 packet_buf.len(), packet_buf[0], id, size+4
             );
-        return None;
+        return Ok(None);
     }
     let length = BigEndian::read_u32(&packet_buf[size..(size + 4)]) as usize; // read length
     size += length;
@@ -79,7 +80,7 @@ pub fn read_postgresql_packet(packet_buf: &mut Vec<u8>) -> Option<Packet> {
                 "FAIL packet_buf(size={}) too small, firstbyte={:#04x}={}, size={}, length={}",
                 packet_buf.len(), packet_buf[0], id, size, length
             );
-        return None;
+        return Ok(None);
     }
     trace!(
         "get_packet(PostgresSQL): SUCCESS firstbyte={:#04x}={}, size={}, length={}",
@@ -89,9 +90,9 @@ pub fn read_postgresql_packet(packet_buf: &mut Vec<u8>) -> Option<Packet> {
         length
     );
 
-    Some(Packet::new(
+    Ok(Some(Packet::new(
         packet_buf.drain(0..size).collect(),
-    ))
+    )))
 }
 
 
@@ -210,15 +211,18 @@ pub struct AppendDbNameTransformer {
 }
 
 impl Transformer<PostgresqlPacket> for AppendDbNameTransformer {
-    fn transform(&self, packet: &PostgresqlPacket) -> PostgresqlPacket {
+    fn transform(&self, packet: &PostgresqlPacket) -> Result<PostgresqlPacket> {
         if let PostgresqlPacketInfo::Startup(message) = &packet.info {
-            let mut newdbname = message.get_parameter("database").unwrap();
-            newdbname.push_str(self.append.deref());
-            let mut message = message.clone();
-            message.set_parameter("database", newdbname);
-            PostgresqlPacket { info: PostgresqlPacketInfo::Startup(message), bytes: None }
+            if let Some(mut newdbname) = message.get_parameter("database") {
+                newdbname.push_str(self.append.deref());
+                let mut message = message.clone();
+                message.set_parameter("database", newdbname);
+                Ok(PostgresqlPacket { info: PostgresqlPacketInfo::Startup(message), bytes: None })
+            } else {
+                Err(anyhow!("No database defined in startup message"))
+            }
         } else {
-            packet.clone()
+            Ok(packet.clone())
         }
     }
 }
@@ -289,6 +293,12 @@ pub enum PostgresqlPacketInfo {
 pub struct PostgresqlPacket {
     info: PostgresqlPacketInfo,
     bytes: Option<Vec<u8>>
+}
+
+impl PostgresqlPacket {
+    pub fn new(info: PostgresqlPacketInfo, bytes: Option<Vec<u8>>) -> PostgresqlPacket {
+        PostgresqlPacket { info, bytes }
+    }
 }
 
 impl Encodable for PostgresqlPacket {
@@ -369,24 +379,24 @@ impl<F,X,E> PacketProcessor for PostgresqlProcessor<F,X,E> where
     E : Encoder<PostgresqlPacket> + Clone
 {
 
-    fn parse(&self, packet_buf: &mut Vec<u8>) -> Option<Packet> {
+    fn parse(&self, packet_buf: &mut Vec<u8>) -> Result<Option<Packet>> {
         return read_postgresql_packet(packet_buf);
     }
 
-    fn process_incoming(&self, packet: &Packet) -> Option<Packet> {
+    fn process_incoming(&self, packet: &Packet) -> Result<Option<Packet>> {
         let rules = &self.rules;
-        let parsed = rules.parser.parse(packet);
+        let parsed = rules.parser.parse(packet)?;
         if rules.filter.filter(&parsed) {
-            let transformed = rules.transformer.transform(&parsed);
-            let encoded = rules.encoder.encode(&transformed);
-            Some(encoded.unwrap())
+            let transformed = rules.transformer.transform(&parsed)?;
+            let encoded = rules.encoder.encode(&transformed)?;
+            Ok(Some(encoded))
         } else {
-            None
+            Ok(None)
         }
     }
 
-    fn process_outgoing(&self, packet: &Packet) -> Option<Packet> {
-        return Some(packet.clone());
+    fn process_outgoing(&self, packet: &Packet) -> Result<Option<Packet>> {
+        Ok(Some(packet.clone()))
     }
 }
 
@@ -403,11 +413,11 @@ impl PostgreSQLReporter {
 
 #[async_trait]
 impl Reporter<PostgresqlPacket> for PostgreSQLReporter {
-    async fn report(&self, message: &PostgresqlPacket) {
+    async fn report(&self, message: &PostgresqlPacket) -> Result<()> {
         let (client, conn) = tokio_postgres::connect(
             &self.config,
             tokio_postgres::NoTls
-        ).await.unwrap();
+        ).await?;
         tokio::spawn(async move {
             if let Err(e) = conn.await {
                 println!("Connection error: {}", e);
@@ -419,6 +429,7 @@ impl Reporter<PostgresqlPacket> for PostgreSQLReporter {
              (packet_type, packet_info, packet_bytes)
              VALUES ($1, $2, $3)",
             &[&"Startup", &packet_info, &message.bytes]
-        ).await.unwrap();
+        ).await?;
+        Ok(())
     }
 }

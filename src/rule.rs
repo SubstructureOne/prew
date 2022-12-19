@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use crate::packet::{Packet};
 
 pub trait Parser<T> {
-    fn parse(&self, packet: &Packet) -> T;
+    fn parse(&self, packet: &Packet) -> Result<T>;
 }
 
 pub trait Filter<T> {
@@ -15,7 +15,7 @@ pub trait Filter<T> {
 }
 
 pub trait Transformer<T> {
-    fn transform(&self, message: &T) -> T;
+    fn transform(&self, message: &T) -> Result<T>;
 }
 
 pub trait Encoder<T> {
@@ -24,7 +24,7 @@ pub trait Encoder<T> {
 
 #[async_trait]
 pub trait Reporter<T> {
-    async fn report(&self, message: &T);
+    async fn report(&self, message: &T) -> Result<()>;
 }
 
 #[derive(Clone)]
@@ -91,8 +91,8 @@ pub struct NoTransform<T> {
     message_type: PhantomData<T>
 }
 impl<T> Transformer<T> for NoTransform<T> where T : Clone {
-    fn transform(&self, message: &T) -> T {
-        message.clone()
+    fn transform(&self, message: &T) -> Result<T> {
+        Ok(message.clone())
     }
 }
 impl<T> NoTransform<T> {
