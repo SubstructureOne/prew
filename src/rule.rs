@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use async_trait::async_trait;
 
-use crate::packet::{Packet};
+use crate::packet::{Direction, Packet};
 
 pub trait Parser<T> {
     fn parse(&self, packet: &Packet) -> Result<T>;
@@ -24,7 +24,7 @@ pub trait Encoder<T> {
 
 #[async_trait]
 pub trait Reporter<T> {
-    async fn report(&self, message: &T) -> Result<()>;
+    async fn report(&self, message: &T, direction: Direction) -> Result<()>;
 }
 
 #[derive(Clone)]
@@ -33,12 +33,14 @@ pub struct PrewRuleSet<
         P : Parser<T> + Clone,
         F : Filter<T> + Clone,
         X : Transformer<T> + Clone,
-        E : Encoder<T> + Clone
+        E : Encoder<T> + Clone,
+        R : Reporter<T> + Clone,
 > {
     pub parser: Box<P>,
     pub filter: Box<F>,
     pub transformer: Box<X>,
     pub encoder: Box<E>,
+    pub reporter: Box<R>,
     packet_type: PhantomData<T>
     // router: Router<T>
 }
@@ -48,24 +50,27 @@ pub trait PacketTransformer {
     fn transform(&self, packet: &Self::PacketType) -> Self::PacketType;
 }
 
-impl<T,P,F,X,E> PrewRuleSet<T,P,F,X,E> where
+impl<T,P,F,X,E,R> PrewRuleSet<T,P,F,X,E,R> where
     T : Clone,
     P : Parser<T> + Clone,
     F : Filter<T> + Clone,
     X : Transformer<T> + Clone,
-    E : Encoder<T> + Clone
+    E : Encoder<T> + Clone,
+    R : Reporter<T> + Clone,
 {
     pub fn new(
         parser: &P,
         filter: &F,
         transformer: &X,
         encoder: &E,
-    ) -> PrewRuleSet<T,P,F,X,E> {
+        reporter: &R,
+    ) -> PrewRuleSet<T,P,F,X,E,R> {
         PrewRuleSet {
             parser: Box::new(parser.clone()),
             filter: Box::new(filter.clone()),
             transformer: Box::new(transformer.clone()),
             encoder: Box::new(encoder.clone()),
+            reporter: Box::new(reporter.clone()),
             packet_type: PhantomData,
         }
     }
@@ -98,6 +103,22 @@ impl<T> Transformer<T> for NoTransform<T> where T : Clone {
 impl<T> NoTransform<T> {
     pub fn new() -> NoTransform<T> {
         NoTransform { message_type: PhantomData }
+    }
+}
+
+#[derive(Clone)]
+pub struct NoReport<T: Sync> {
+    message_type: PhantomData<T>
+}
+#[async_trait]
+impl<T: Sync> Reporter<T> for NoReport<T> {
+    async fn report(&self, _message: &T, _direction: Direction) -> Result<()> {
+        Ok(())
+    }
+}
+impl<T: Sync> NoReport<T> {
+    pub fn new() -> NoReport<T> {
+        NoReport { message_type: PhantomData }
     }
 }
 

@@ -12,8 +12,8 @@ use crate::{
     rule::PrewRuleSet,
     rule::PacketTransformer,
 };
-use crate::packet::PacketProcessor;
-use crate::rule::{NoFilter, NoTransform, Parser, Encodable, MessageEncoder, Transformer};
+use crate::packet::{Direction, PacketProcessor};
+use crate::rule::{NoFilter, NoTransform, Parser, Encodable, MessageEncoder, Transformer, NoReport};
 use crate::rule::{Encoder, Filter, Reporter};
 
 pub const POSTGRES_IDS: [char; 31] = [
@@ -100,9 +100,10 @@ pub fn read_postgresql_packet(packet_buf: &mut Vec<u8>) -> Result<Option<Packet>
 pub struct PostgresqlProcessor<
     F: Filter<PostgresqlPacket> + Clone,
     X: Transformer<PostgresqlPacket> + Clone,
-    E: Encoder<PostgresqlPacket> + Clone
+    E: Encoder<PostgresqlPacket> + Clone,
+    R: Reporter<PostgresqlPacket> + Clone,
 > {
-    rules: PrewRuleSet<PostgresqlPacket,PostgresParser,F,X,E>
+    rules: PrewRuleSet<PostgresqlPacket,PostgresParser,F,X,E,R>
 }
 
 
@@ -317,12 +318,13 @@ impl Encodable for PostgresqlPacket {
 
 
 
-impl<F,X,E> PostgresqlProcessor<F,X,E> where
+impl<F,X,E,R> PostgresqlProcessor<F,X,E,R> where
         F : Filter<PostgresqlPacket> + Clone,
         X : Transformer<PostgresqlPacket> + Clone,
-        E : Encoder<PostgresqlPacket> + Clone
+        E : Encoder<PostgresqlPacket> + Clone,
+        R : Reporter<PostgresqlPacket> + Clone
 {
-    pub fn new(rules: PrewRuleSet<PostgresqlPacket, PostgresParser, F, X, E>) -> PostgresqlProcessor<F, X, E> {
+    pub fn new(rules: PrewRuleSet<PostgresqlPacket, PostgresParser, F, X, E, R>) -> PostgresqlProcessor<F, X, E, R> {
         PostgresqlProcessor { rules }
     }
 }
@@ -330,55 +332,67 @@ impl<F,X,E> PostgresqlProcessor<F,X,E> where
 impl PostgresqlProcessor<
         NoFilter<PostgresqlPacket>,
         NoTransform<PostgresqlPacket>,
-        MessageEncoder<PostgresqlPacket>
+        MessageEncoder<PostgresqlPacket>,
+        NoReport<PostgresqlPacket>,
 > {
     pub fn passthru() -> PostgresqlProcessor<
         NoFilter<PostgresqlPacket>,
         NoTransform<PostgresqlPacket>,
         MessageEncoder<PostgresqlPacket>,
+        NoReport<PostgresqlPacket>,
     > {
         let transformer = NoTransform::new();
         let parser = PostgresParser {};
         let filter = NoFilter::new();
         let encoder = MessageEncoder::<PostgresqlPacket>::new();
+        let reporter = NoReport::new();
         PostgresqlProcessor::new(
             PrewRuleSet::new(
                 &parser,
                 &filter,
                 &transformer,
                 &encoder,
+                &reporter,
             )
         )
     }
 }
 
-impl PostgresqlProcessor<NoFilter<PostgresqlPacket>, AppendDbNameTransformer, MessageEncoder<PostgresqlPacket>> {
+impl PostgresqlProcessor<
+    NoFilter<PostgresqlPacket>,
+    AppendDbNameTransformer,
+    MessageEncoder<PostgresqlPacket>,
+    PostgreSQLReporter,
+> {
     pub fn appenddbname<S: Into<String>>(append: S) -> PostgresqlProcessor<
         NoFilter<PostgresqlPacket>,
         AppendDbNameTransformer,
-        MessageEncoder<PostgresqlPacket>
+        MessageEncoder<PostgresqlPacket>,
+        PostgreSQLReporter
     > {
         let appender = AppendDbNameTransformer { append: append.into() };
         let parser = PostgresParser {};
         let filter = NoFilter::new();
         let encoder = MessageEncoder::new();
+        let reporter = PostgreSQLReporter::new("FIXME");
         PostgresqlProcessor::new(
             PrewRuleSet::new(
                 &parser,
                 &filter,
                 &appender,
                 &encoder,
+                &reporter
             )
         )
     }
 }
 
-impl<F,X,E> PacketProcessor for PostgresqlProcessor<F,X,E> where
+impl<F,X,E,R> PacketProcessor for PostgresqlProcessor<F,X,E,R> where
     F : Filter<PostgresqlPacket> + Clone,
     X : Transformer<PostgresqlPacket> + Clone,
-    E : Encoder<PostgresqlPacket> + Clone
+    E : Encoder<PostgresqlPacket> + Clone,
+    R : Reporter<PostgresqlPacket> + Clone,
 {
-
     fn parse(&self, packet_buf: &mut Vec<u8>) -> Result<Option<Packet>> {
         return read_postgresql_packet(packet_buf);
     }
@@ -386,6 +400,7 @@ impl<F,X,E> PacketProcessor for PostgresqlProcessor<F,X,E> where
     fn process_incoming(&self, packet: &Packet) -> Result<Option<Packet>> {
         let rules = &self.rules;
         let parsed = rules.parser.parse(packet)?;
+        rules.reporter.report(&parsed, Direction::Forward);
         if rules.filter.filter(&parsed) {
             let transformed = rules.transformer.transform(&parsed)?;
             let encoded = rules.encoder.encode(&transformed)?;
@@ -396,11 +411,16 @@ impl<F,X,E> PacketProcessor for PostgresqlProcessor<F,X,E> where
     }
 
     fn process_outgoing(&self, packet: &Packet) -> Result<Option<Packet>> {
+        self.rules.reporter.report(
+            &PostgresqlPacket::new(PostgresqlPacketInfo::Other, Some(packet.bytes.clone())),
+            Direction::Backward
+        );
         Ok(Some(packet.clone()))
     }
 }
 
 
+#[derive(Clone)]
 pub struct PostgreSQLReporter {
     config: String
 }
@@ -413,7 +433,7 @@ impl PostgreSQLReporter {
 
 #[async_trait]
 impl Reporter<PostgresqlPacket> for PostgreSQLReporter {
-    async fn report(&self, message: &PostgresqlPacket) -> Result<()> {
+    async fn report(&self, message: &PostgresqlPacket, direction: Direction) -> Result<()> {
         let (client, conn) = tokio_postgres::connect(
             &self.config,
             tokio_postgres::NoTls
@@ -423,12 +443,21 @@ impl Reporter<PostgresqlPacket> for PostgreSQLReporter {
                 println!("Connection error: {}", e);
             }
         });
+        let direction_str = match direction {
+            Direction::Forward => "Forward",
+            Direction::Backward => "Backward",
+        };
+        let message_type = match message.info {
+            PostgresqlPacketInfo::Startup(_) => "Startup",
+            PostgresqlPacketInfo::Query(_) => "Query",
+            PostgresqlPacketInfo::Other => "Other",
+        };
         let packet_info = serde_json::to_string(&message.info).unwrap();
         let rowcount = client.execute(
             "INSERT INTO reports
-             (packet_type, packet_info, packet_bytes)
+             (packet_type, direction, packet_info, packet_bytes)
              VALUES ($1, $2, $3)",
-            &[&"Startup", &packet_info, &message.bytes]
+            &[&message_type, &direction_str, &packet_info, &message.bytes]
         ).await?;
         Ok(())
     }
