@@ -1,4 +1,9 @@
 use std::marker::PhantomData;
+
+use anyhow::Result;
+
+use async_trait::async_trait;
+
 use crate::packet::{Packet};
 
 pub trait Parser<T> {
@@ -14,7 +19,12 @@ pub trait Transformer<T> {
 }
 
 pub trait Encoder<T> {
-    fn encode(&self, message: &T) -> Packet;
+    fn encode(&self, message: &T) -> Result<Packet>;
+}
+
+#[async_trait]
+pub trait Reporter<T> {
+    async fn report(&self, message: &T);
 }
 
 #[derive(Clone)]
@@ -60,25 +70,6 @@ impl<T,P,F,X,E> PrewRuleSet<T,P,F,X,E> where
         }
     }
 }
-// impl<T,P,F,X,E> PacketProcessor for PrewRuleSet<T,P,F,X,E> where
-//     T : Clone,
-//     P : Parser<T> + Clone,
-//     F : Filter<T> + Clone,
-//     X : Transformer<T> + Clone,
-//     E : Encoder<T> + Clone
-// {
-//     fn parse(&self, packet_buf: &mut Vec<u8>) -> Option<Packet> {
-//         Some(self.parser.parse(packet_buf))
-//     }
-//
-//     fn process_incoming(&self, packet: &Packet) -> Option<Packet> {
-//         todo!()
-//     }
-//
-//     fn process_outgoing(&self, packet: &Packet) -> Option<Packet> {
-//         todo!()
-//     }
-// }
 
 #[derive(Clone)]
 pub struct NoFilter<T> {
@@ -112,7 +103,7 @@ impl<T> NoTransform<T> {
 
 
 pub trait Encodable {
-    fn encode(&self) -> Packet;
+    fn encode(&self) -> Result<Packet>;
 }
 
 #[derive(Clone)]
@@ -120,8 +111,8 @@ pub struct MessageEncoder<T: Encodable> {
     message_type: PhantomData<T>
 }
 impl<T> Encoder<T> for MessageEncoder<T> where T : Encodable {
-    fn encode(&self, message: &T) -> Packet {
-        return message.encode();
+    fn encode(&self, message: &T) -> Result<Packet> {
+        message.encode()
     }
 }
 impl<T> MessageEncoder<T> where T : Encodable {

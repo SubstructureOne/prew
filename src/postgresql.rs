@@ -1,7 +1,11 @@
 use std::marker::PhantomData;
 use std::ops::Deref;
+
+use anyhow::{Result, anyhow};
+use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
 use log::{trace};
+use serde::{Serialize};
 
 use crate::{
     packet::{Packet},
@@ -10,7 +14,7 @@ use crate::{
 };
 use crate::packet::PacketProcessor;
 use crate::rule::{NoFilter, NoTransform, Parser, Encodable, MessageEncoder, Transformer};
-use crate::rule::{Encoder, Filter};
+use crate::rule::{Encoder, Filter, Reporter};
 
 pub const POSTGRES_IDS: [char; 31] = [
     'R', 'K', 'B', '2', '3', 'C', 'd', 'c', 'f', 'G', 'H', 'W', 'D', 'I', 'E', 'F', 'V', 'p', 'v',
@@ -23,22 +27,24 @@ pub struct PostgresParser {}
 impl Parser<PostgresqlPacket> for PostgresParser {
     fn parse(&self, packet: &Packet) -> PostgresqlPacket {
         let packet_type = packet.bytes[0] as char;
+        let info;
         if POSTGRES_IDS.contains(&packet_type) {
             if packet_type == 'Q' {
-                PostgresqlPacket::Query(QueryMessage::new(&packet.bytes))
+                info = PostgresqlPacketInfo::Query(QueryMessage::new(&packet.bytes))
             } else {
-                PostgresqlPacket::Other(OtherMessage::new(&packet.bytes))
+                info = PostgresqlPacketInfo::Other
             }
         } else {
             if packet.bytes.len() >= 8
                 && BigEndian::read_u32(&packet.bytes[4..8]) == 196_608
             {
                 // startup message
-                PostgresqlPacket::Startup(StartupMessage::new(&packet.bytes))
+                info = PostgresqlPacketInfo::Startup(StartupMessage::new(&packet.bytes))
             } else {
-                PostgresqlPacket::Other(OtherMessage::new(&packet.bytes))
+                info = PostgresqlPacketInfo::Other
             }
         }
+        PostgresqlPacket { bytes: Some(packet.bytes.clone()), info }
     }
 }
 
@@ -99,7 +105,7 @@ pub struct PostgresqlProcessor<
 }
 
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct StartupMessage {
     // username: String,
     // database: String,
@@ -109,7 +115,7 @@ pub struct StartupMessage {
 }
 
 impl Encodable for StartupMessage {
-    fn encode(&self) -> Packet {
+    fn encode(&self) -> Result<Packet> {
         let mut bytes = vec![];
         // Length =
         //      4 bytes for length
@@ -131,9 +137,7 @@ impl Encodable for StartupMessage {
         }
         bytes.push(0);
         trace!("Newly encoded startup message: size {} ({}): {:?}", length, bytes.len(), bytes);
-        Packet {
-            bytes
-        }
+        Ok(Packet { bytes })
     }
 }
 
@@ -207,12 +211,12 @@ pub struct AppendDbNameTransformer {
 
 impl Transformer<PostgresqlPacket> for AppendDbNameTransformer {
     fn transform(&self, packet: &PostgresqlPacket) -> PostgresqlPacket {
-        if let PostgresqlPacket::Startup(message) = packet {
+        if let PostgresqlPacketInfo::Startup(message) = &packet.info {
             let mut newdbname = message.get_parameter("database").unwrap();
             newdbname.push_str(self.append.deref());
             let mut message = message.clone();
             message.set_parameter("database", newdbname);
-            PostgresqlPacket::Startup(message)
+            PostgresqlPacket { info: PostgresqlPacketInfo::Startup(message), bytes: None }
         } else {
             packet.clone()
         }
@@ -233,7 +237,7 @@ impl<T> PacketTransformer for IdentityTransformer<T> where T : Clone {
 }
 
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct QueryMessage {
     query: String,
 }
@@ -253,7 +257,7 @@ impl QueryMessage {
 
 
 impl Encodable for QueryMessage {
-    fn encode(&self) -> Packet {
+    fn encode(&self) -> Result<Packet> {
         let mut bytes = vec![];
         let mut sqlbytes = self.query.as_bytes().to_vec();
         if sqlbytes[sqlbytes.len()-1] != 0 {
@@ -267,49 +271,36 @@ impl Encodable for QueryMessage {
         bytes.push('Q' as u8);
         bytes.extend(length.to_be_bytes());
         bytes.extend(sqlbytes);
-        Packet {
+        Ok(Packet {
             bytes
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct OtherMessage {
-    bytes: Vec<u8>
-}
-
-
-impl OtherMessage {
-    pub fn new(bytes: &Vec<u8>) -> OtherMessage {
-        OtherMessage {
-            bytes: bytes.clone()
-        }
-    }
-}
-
-impl Encodable for OtherMessage {
-    fn encode(&self) -> Packet {
-        Packet {
-            bytes: self.bytes.clone(),
-        }
+        })
     }
 }
 
 
-#[derive(Clone, Debug)]
-pub enum PostgresqlPacket {
+#[derive(Clone, Debug, Serialize)]
+pub enum PostgresqlPacketInfo {
     Startup(StartupMessage),
     Query(QueryMessage),
-    Other(OtherMessage),
+    Other,
 }
 
+#[derive(Clone, Debug)]
+pub struct PostgresqlPacket {
+    info: PostgresqlPacketInfo,
+    bytes: Option<Vec<u8>>
+}
 
 impl Encodable for PostgresqlPacket {
-    fn encode(&self) -> Packet {
-        match self {
-            PostgresqlPacket::Startup(message) => message.encode(),
-            PostgresqlPacket::Query(message) => message.encode(),
-            PostgresqlPacket::Other(message) => message.encode(),
+    fn encode(&self) -> Result<Packet> {
+        if let Some(bytes) = &self.bytes {
+            Ok(Packet::new(bytes.clone()))
+        } else {
+            match &self.info {
+                PostgresqlPacketInfo::Startup(message) => message.encode(),
+                PostgresqlPacketInfo::Query(message) => message.encode(),
+                PostgresqlPacketInfo::Other => Err(anyhow!("Cannot encode 'other' messages"))
+            }
         }
     }
 }
@@ -388,7 +379,7 @@ impl<F,X,E> PacketProcessor for PostgresqlProcessor<F,X,E> where
         if rules.filter.filter(&parsed) {
             let transformed = rules.transformer.transform(&parsed);
             let encoded = rules.encoder.encode(&transformed);
-            Some(encoded)
+            Some(encoded.unwrap())
         } else {
             None
         }
@@ -396,5 +387,38 @@ impl<F,X,E> PacketProcessor for PostgresqlProcessor<F,X,E> where
 
     fn process_outgoing(&self, packet: &Packet) -> Option<Packet> {
         return Some(packet.clone());
+    }
+}
+
+
+pub struct PostgreSQLReporter {
+    config: String
+}
+
+impl PostgreSQLReporter {
+    pub fn new<S: Into<String>>(config: S) -> PostgreSQLReporter {
+        PostgreSQLReporter { config: config.into() }
+    }
+}
+
+#[async_trait]
+impl Reporter<PostgresqlPacket> for PostgreSQLReporter {
+    async fn report(&self, message: &PostgresqlPacket) {
+        let (client, conn) = tokio_postgres::connect(
+            &self.config,
+            tokio_postgres::NoTls
+        ).await.unwrap();
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                println!("Connection error: {}", e);
+            }
+        });
+        let packet_info = serde_json::to_string(&message.info).unwrap();
+        let rowcount = client.execute(
+            "INSERT INTO reports
+             (packet_type, packet_info, packet_bytes)
+             VALUES ($1, $2, $3)",
+            &[&"Startup", &packet_info, &message.bytes]
+        ).await.unwrap();
     }
 }
