@@ -91,8 +91,8 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
                 if let Ok(Some(packet)) = h.parse(&mut packet_buf) {
                     self.trace("Processing packet".to_string());
                     transformed_packet = match self.direction {
-                        Direction::Forward => h.process_incoming(&packet)?,
-                        Direction::Backward => h.process_outgoing(&packet)?,
+                        Direction::Forward => h.process_incoming(&packet).await?,
+                        Direction::Backward => h.process_outgoing(&packet).await?,
                     };
                     self.trace(format!("Transformed packet: {:?}", transformed_packet));
                 } else {

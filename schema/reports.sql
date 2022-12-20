@@ -15,5 +15,8 @@ CREATE TABLE IF NOT EXISTS reports (
     packet_time timestamp NOT NULL DEFAULT now(),
     direction pktdirection,
     packet_info jsonb,
-    packet_bytes bytea
+    packet_bytes bytea,
+    charged boolean NOT NULL DEFAULT FALSE
 );
+
+CREATE INDEX reports_not_charged_index ON reports (packet_id) WHERE NOT charged;

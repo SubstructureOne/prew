@@ -1,4 +1,5 @@
 use anyhow::Result;
+use async_trait::async_trait;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Packet {
@@ -11,10 +12,11 @@ impl Packet {
     }
 }
 
+#[async_trait]
 pub trait PacketProcessor {
     fn parse(&self, packet_buf: &mut Vec<u8>) -> Result<Option<Packet>>;
-    fn process_incoming(&self, packet: &Packet) -> Result<Option<Packet>>;
-    fn process_outgoing(&self, packet: &Packet) -> Result<Option<Packet>>;
+    async fn process_incoming(&self, packet: &Packet) -> Result<Option<Packet>>;
+    async fn process_outgoing(&self, packet: &Packet) -> Result<Option<Packet>>;
 }
 
 

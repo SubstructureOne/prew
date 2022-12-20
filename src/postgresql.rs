@@ -387,20 +387,21 @@ impl PostgresqlProcessor<
     }
 }
 
+#[async_trait]
 impl<F,X,E,R> PacketProcessor for PostgresqlProcessor<F,X,E,R> where
-    F : Filter<PostgresqlPacket> + Clone,
-    X : Transformer<PostgresqlPacket> + Clone,
-    E : Encoder<PostgresqlPacket> + Clone,
-    R : Reporter<PostgresqlPacket> + Clone,
+    F : Filter<PostgresqlPacket> + Clone + Sync + Send,
+    X : Transformer<PostgresqlPacket> + Clone + Sync + Send,
+    E : Encoder<PostgresqlPacket> + Clone + Sync + Send,
+    R : Reporter<PostgresqlPacket> + Clone + Sync + Send,
 {
     fn parse(&self, packet_buf: &mut Vec<u8>) -> Result<Option<Packet>> {
         return read_postgresql_packet(packet_buf);
     }
 
-    fn process_incoming(&self, packet: &Packet) -> Result<Option<Packet>> {
+    async fn process_incoming(&self, packet: &Packet) -> Result<Option<Packet>> {
         let rules = &self.rules;
         let parsed = rules.parser.parse(packet)?;
-        rules.reporter.report(&parsed, Direction::Forward);
+        rules.reporter.report(&parsed, Direction::Forward).await?;
         if rules.filter.filter(&parsed) {
             let transformed = rules.transformer.transform(&parsed)?;
             let encoded = rules.encoder.encode(&transformed)?;
@@ -410,11 +411,11 @@ impl<F,X,E,R> PacketProcessor for PostgresqlProcessor<F,X,E,R> where
         }
     }
 
-    fn process_outgoing(&self, packet: &Packet) -> Result<Option<Packet>> {
+    async fn process_outgoing(&self, packet: &Packet) -> Result<Option<Packet>> {
         self.rules.reporter.report(
             &PostgresqlPacket::new(PostgresqlPacketInfo::Other, Some(packet.bytes.clone())),
             Direction::Backward
-        );
+        ).await?;
         Ok(Some(packet.clone()))
     }
 }
