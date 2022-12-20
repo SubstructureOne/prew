@@ -1,6 +1,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
+use crate::rule::Context;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Packet {
     pub bytes: Vec<u8>,
@@ -15,8 +17,8 @@ impl Packet {
 #[async_trait]
 pub trait PacketProcessor {
     fn parse(&self, packet_buf: &mut Vec<u8>) -> Result<Option<Packet>>;
-    async fn process_incoming(&self, packet: &Packet) -> Result<Option<Packet>>;
-    async fn process_outgoing(&self, packet: &Packet) -> Result<Option<Packet>>;
+    async fn process_incoming(&self, packet: &Packet, context: &mut Context) -> Result<Option<Packet>>;
+    async fn process_outgoing(&self, packet: &Packet, context: &mut Context) -> Result<Option<Packet>>;
 }
 
 

@@ -8,6 +8,7 @@ use log::{trace, warn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::packet::{Direction, Packet, PacketProcessor};
+use crate::rule::Context;
 
 
 pub struct Pipe<T: AsyncReadExt, U: AsyncWriteExt> {
@@ -44,6 +45,7 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
         let mut read_buf: Vec<u8> = vec![0_u8; 4096];
         let mut packet_buf: Vec<u8> = Vec::with_capacity(4096);
         let mut write_buf: Vec<u8> = Vec::with_capacity(4096);
+        let mut context = Context::new();
 
         loop {
             let read_result = self.source.read(&mut read_buf[..]).await?;
@@ -52,6 +54,7 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
                     &read_buf,
                     &mut packet_buf,
                     &mut write_buf,
+                    &mut context,
                     // &mut other_pipe_sender
                 ).await?;
 
@@ -70,6 +73,7 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
         read_buf: &[u8],
         mut packet_buf: &mut Vec<u8>,
         write_buf: &mut Vec<u8>,
+        context: &mut Context,
         // other_pipe_sender: &mut Sender<Packet>,
     ) -> Result<()> {
         if n == 0 {
@@ -91,8 +95,8 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
                 if let Ok(Some(packet)) = h.parse(&mut packet_buf) {
                     self.trace("Processing packet".to_string());
                     transformed_packet = match self.direction {
-                        Direction::Forward => h.process_incoming(&packet).await?,
-                        Direction::Backward => h.process_outgoing(&packet).await?,
+                        Direction::Forward => h.process_incoming(&packet, &context).await?,
+                        Direction::Backward => h.process_outgoing(&packet, &context).await?,
                     };
                     self.trace(format!("Transformed packet: {:?}", transformed_packet));
                 } else {

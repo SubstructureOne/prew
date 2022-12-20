@@ -13,7 +13,7 @@ use crate::{
     rule::PacketTransformer,
 };
 use crate::packet::{Direction, PacketProcessor};
-use crate::rule::{NoFilter, NoTransform, Parser, Encodable, MessageEncoder, Transformer, NoReport};
+use crate::rule::{NoFilter, NoTransform, Parser, Encodable, MessageEncoder, Transformer, NoReport, Context};
 use crate::rule::{Encoder, Filter, Reporter};
 
 pub const POSTGRES_IDS: [char; 31] = [
@@ -25,7 +25,7 @@ pub const POSTGRES_IDS: [char; 31] = [
 #[derive(Clone)]
 pub struct PostgresParser {}
 impl Parser<PostgresqlPacket> for PostgresParser {
-    fn parse(&self, packet: &Packet) -> Result<PostgresqlPacket> {
+    fn parse(&self, packet: &Packet, context: &mut Context) -> Result<PostgresqlPacket> {
         let packet_type = packet.bytes[0] as char;
         let info;
         if POSTGRES_IDS.contains(&packet_type) {
@@ -38,8 +38,12 @@ impl Parser<PostgresqlPacket> for PostgresParser {
             if packet.bytes.len() >= 8
                 && BigEndian::read_u32(&packet.bytes[4..8]) == 196_608
             {
-                // startup message
-                info = PostgresqlPacketInfo::Startup(StartupMessage::new(&packet.bytes))
+                let msg = StartupMessage::new(&packet.bytes);
+                // FIXME: only store the username once the user is authenticated
+                if let Some(username) = msg.get_parameter("username") {
+                    context.username = Some(username)
+                }
+                info = PostgresqlPacketInfo::Startup(msg);
             } else {
                 info = PostgresqlPacketInfo::Other
             }
@@ -398,10 +402,10 @@ impl<F,X,E,R> PacketProcessor for PostgresqlProcessor<F,X,E,R> where
         return read_postgresql_packet(packet_buf);
     }
 
-    async fn process_incoming(&self, packet: &Packet) -> Result<Option<Packet>> {
+    async fn process_incoming(&self, packet: &Packet, context: &mut Context) -> Result<Option<Packet>> {
         let rules = &self.rules;
-        let parsed = rules.parser.parse(packet)?;
-        rules.reporter.report(&parsed, Direction::Forward).await?;
+        let parsed = rules.parser.parse(packet, context)?;
+        rules.reporter.report(&parsed, Direction::Forward, context).await?;
         if rules.filter.filter(&parsed) {
             let transformed = rules.transformer.transform(&parsed)?;
             let encoded = rules.encoder.encode(&transformed)?;
@@ -411,10 +415,11 @@ impl<F,X,E,R> PacketProcessor for PostgresqlProcessor<F,X,E,R> where
         }
     }
 
-    async fn process_outgoing(&self, packet: &Packet) -> Result<Option<Packet>> {
+    async fn process_outgoing(&self, packet: &Packet, context: &mut Context) -> Result<Option<Packet>> {
         self.rules.reporter.report(
             &PostgresqlPacket::new(PostgresqlPacketInfo::Other, Some(packet.bytes.clone())),
-            Direction::Backward
+            Direction::Backward,
+            context
         ).await?;
         Ok(Some(packet.clone()))
     }
@@ -434,7 +439,12 @@ impl PostgreSQLReporter {
 
 #[async_trait]
 impl Reporter<PostgresqlPacket> for PostgreSQLReporter {
-    async fn report(&self, message: &PostgresqlPacket, direction: Direction) -> Result<()> {
+    async fn report(
+            &self,
+            message: &PostgresqlPacket,
+            direction: Direction,
+            context: &Context
+    ) -> Result<()> {
         let (client, conn) = tokio_postgres::connect(
             &self.config,
             tokio_postgres::NoTls
@@ -456,9 +466,15 @@ impl Reporter<PostgresqlPacket> for PostgreSQLReporter {
         let packet_info = serde_json::to_string(&message.info).unwrap();
         let rowcount = client.execute(
             "INSERT INTO reports
-             (packet_type, direction, packet_info, packet_bytes)
-             VALUES ($1, $2, $3)",
-            &[&message_type, &direction_str, &packet_info, &message.bytes]
+             (username, packet_type, direction, packet_info, packet_bytes)
+             VALUES ($1, $2, $3, $r)",
+            &[
+                &context.username,
+                &message_type,
+                &direction_str,
+                &packet_info,
+                &message.bytes
+            ]
         ).await?;
         Ok(())
     }

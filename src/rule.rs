@@ -6,8 +6,18 @@ use async_trait::async_trait;
 
 use crate::packet::{Direction, Packet};
 
+// FIXME: make Context generic
+pub struct Context {
+    pub username: Option<String>
+}
+impl Context {
+    pub fn new() -> Context {
+        Context { username: None }
+    }
+}
+
 pub trait Parser<T> {
-    fn parse(&self, packet: &Packet) -> Result<T>;
+    fn parse(&self, packet: &Packet, context: &mut Context) -> Result<T>;
 }
 
 pub trait Filter<T> {
@@ -24,7 +34,7 @@ pub trait Encoder<T> {
 
 #[async_trait]
 pub trait Reporter<T> {
-    async fn report(&self, message: &T, direction: Direction) -> Result<()>;
+    async fn report(&self, message: &T, direction: Direction, context: &Context) -> Result<()>;
 }
 
 #[derive(Clone)]
@@ -134,6 +144,7 @@ impl<T,P,E> PrewRuleSet<T, P, NoFilter<T>, NoTransform<T>, E, NoReport<T>>
     }
 }
 
+
 #[derive(Clone)]
 pub struct NoParserEncoder {}
 impl NoParserEncoder {
@@ -142,7 +153,7 @@ impl NoParserEncoder {
     }
 }
 impl Parser<Packet> for NoParserEncoder {
-    fn parse(&self, packet: &Packet) -> Result<Packet> {
+    fn parse(&self, packet: &Packet, _context: &mut Context) -> Result<Packet> {
         Ok(packet.clone())
     }
 }
@@ -188,7 +199,7 @@ pub struct NoReport<T: Sync> {
 }
 #[async_trait]
 impl<T: Sync> Reporter<T> for NoReport<T> {
-    async fn report(&self, _message: &T, _direction: Direction) -> Result<()> {
+    async fn report(&self, _message: &T, _direction: Direction, _context: &Context) -> Result<()> {
         Ok(())
     }
 }
