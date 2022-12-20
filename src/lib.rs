@@ -96,11 +96,11 @@ impl RewriteReverseProxy where {
             // - pipes are infinite loops, and never expect to exit unless error
             // - any return will close this connection
             select! {
-                _ = forward_pipe.run().fuse() => {
-                    trace!("Pipe closed via forward pipe");
+                result = forward_pipe.run().fuse() => {
+                    trace!("Pipe closed via forward pipe: {:?}", result);
                 },
-                _ = backward_pipe.run().fuse() => {
-                    trace!("Pipe closed via backward pipe");
+                result = backward_pipe.run().fuse() => {
+                    trace!("Pipe closed via backward pipe: {:?}", result);
                 },
                 // msg = kill_switch_receiver.fuse() => {
                 //     trace!("Pipe closed via kill switch: {:?}", msg);

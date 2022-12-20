@@ -40,7 +40,7 @@ impl Parser<PostgresqlPacket> for PostgresParser {
             {
                 let msg = StartupMessage::new(&packet.bytes);
                 // FIXME: only store the username once the user is authenticated
-                if let Some(username) = msg.get_parameter("username") {
+                if let Some(username) = msg.get_parameter("user") {
                     context.username = Some(username)
                 }
                 info = PostgresqlPacketInfo::Startup(msg);
@@ -218,13 +218,20 @@ pub struct AppendDbNameTransformer {
 impl Transformer<PostgresqlPacket> for AppendDbNameTransformer {
     fn transform(&self, packet: &PostgresqlPacket) -> Result<PostgresqlPacket> {
         if let PostgresqlPacketInfo::Startup(message) = &packet.info {
-            if let Some(mut newdbname) = message.get_parameter("database") {
+            let dbname = message.get_parameter("database")
+                .ok_or_else(|| anyhow!("Database name missing from startup message"))?;
+            let username = message.get_parameter("user")
+                .ok_or_else(|| anyhow!("Username missing from startup message"))?;
+            if dbname.eq(&username) {
+                // don't append anything if the user is attempting to connect
+                // to their own database
+                Ok(packet.clone())
+            } else {
+                let mut newdbname = dbname.clone();
                 newdbname.push_str(self.append.deref());
                 let mut message = message.clone();
                 message.set_parameter("database", newdbname);
                 Ok(PostgresqlPacket { info: PostgresqlPacketInfo::Startup(message), bytes: None })
-            } else {
-                Err(anyhow!("No database defined in startup message"))
             }
         } else {
             Ok(packet.clone())
@@ -366,19 +373,20 @@ impl PostgresqlProcessor<
     NoFilter<PostgresqlPacket>,
     AppendDbNameTransformer,
     MessageEncoder<PostgresqlPacket>,
-    PostgreSQLReporter,
+    NoReport<PostgresqlPacket>,
 > {
     pub fn appenddbname<S: Into<String>>(append: S) -> PostgresqlProcessor<
         NoFilter<PostgresqlPacket>,
         AppendDbNameTransformer,
         MessageEncoder<PostgresqlPacket>,
-        PostgreSQLReporter
+        NoReport<PostgresqlPacket>
     > {
         let appender = AppendDbNameTransformer { append: append.into() };
         let parser = PostgresParser {};
         let filter = NoFilter::new();
         let encoder = MessageEncoder::new();
-        let reporter = PostgreSQLReporter::new("FIXME");
+        // let reporter = PostgreSQLReporter::new("FIXME");
+        let reporter = NoReport::new();
         PostgresqlProcessor::new(
             PrewRuleSet::new(
                 &parser,

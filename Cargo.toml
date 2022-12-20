@@ -12,7 +12,8 @@ futures = "0.3.25"
 log = "0.4.17"
 serde = { version = "1.0.147", features = ["derive"] }
 tokio = { version = "1.21.2", features = ["full"]}
-pg_query = { git = "https://github.com/SubstructureOne/pg_query.rs.git", branch = "pg-14" }
+#pg_query = { git = "https://github.com/SubstructureOne/pg_query.rs.git", branch = "pg-14" }
+pg_query = "0.7"
 toml = "0.5.9"
 async-trait = "0.1.60"
 tokio-postgres = "0.7.7"

@@ -594,7 +594,8 @@ dependencies = [
 [[package]]
 name = "pg_query"
 version = "0.7.0"
-source = "git+https://github.com/SubstructureOne/pg_query.rs.git?branch=pg-14#b9ebb7f7cf7f9416b7ccccaf6cd376b3a3aad5eb"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61c1738c89c0bfd5b76ff7f3817c5a7cf2d39e5e5f25b5d60433ab58a01aca02"
 dependencies = [
  "bindgen",
  "fs_extra",

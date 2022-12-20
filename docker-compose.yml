@@ -1,0 +1,25 @@
+version: '3'
+
+services:
+  postgres:
+    image: postgres:13-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=pw
+      - POSTGRES_DB=postgres
+    ports:
+      - "15432:5432"
+  prew:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    environment:
+      - PREW_BIND_ADDR=0.0.0.0:5432
+      - PREW_SERVER_ADDR=postgres:5432
+      - RUST_LOG=debug
+    command:
+      prew
+    depends_on:
+      - postgres
+    ports:
+      - "16432:5432"

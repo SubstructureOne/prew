@@ -1,10 +1,11 @@
-use std::error::Error;
-use serde::{Serialize, Deserialize};
-
+use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::sync::Arc;
-use log::{warn};
+
+use serde::{Serialize, Deserialize};
+use anyhow::Result;
+use log::{warn, info};
 
 use prew::{RewriteReverseProxy, PostgresqlProcessor, PacketRules};
 
@@ -39,7 +40,7 @@ impl Default for PrewConfig {
 
 
 
-fn write_default_config() -> Result<PrewConfig, Box<dyn Error>> {
+fn write_default_config() -> Result<PrewConfig> {
     let config = PrewConfig::default();
     let s = toml::to_string_pretty(&config)?;
     let mut f = OpenOptions::new()
@@ -52,7 +53,7 @@ fn write_default_config() -> Result<PrewConfig, Box<dyn Error>> {
 }
 
 
-fn read_config() -> Result<PrewConfig, Box<dyn Error>> {
+fn read_config() -> Result<PrewConfig> {
     let path = "prew.toml";
     let cfg_data: PrewConfig;
     match File::open(path) {
@@ -70,11 +71,20 @@ fn read_config() -> Result<PrewConfig, Box<dyn Error>> {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>>{
+async fn main() -> Result<()>{
     env_logger::init();
-    let config = read_config()?;
+    let mut config = read_config()?;
+    if let Ok(bind_addr) = env::var("PREW_BIND_ADDR") {
+        info!("Overriding bind address: {}", &bind_addr);
+        config.bind_addr = bind_addr;
+    }
+    if let Ok(server_addr) = env::var("PREW_SERVER_ADDR") {
+        info!("Overriding server address: {}", &server_addr);
+        config.server_addr = server_addr;
+    }
     // let (_tx, rx) = oneshot::channel();
     // let processor = PostgresqlProcessor::passthru();
+    info!("Starting proxy");
     if let ProxyMode::DbAppend(appendinfo) = config.mode {
         let mut proxy = RewriteReverseProxy::new();
         let processor = PostgresqlProcessor::appenddbname(appendinfo.append);

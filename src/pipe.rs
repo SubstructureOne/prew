@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use log::{trace, warn};
+use log::{error, trace, warn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::packet::{Direction, Packet, PacketProcessor};
@@ -49,14 +49,14 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
 
         loop {
             let read_result = self.source.read(&mut read_buf[..]).await?;
-                self.process_read_buf(
-                    read_result,
-                    &read_buf,
-                    &mut packet_buf,
-                    &mut write_buf,
-                    &mut context,
-                    // &mut other_pipe_sender
-                ).await?;
+            self.process_read_buf(
+                read_result,
+                &read_buf,
+                &mut packet_buf,
+                &mut write_buf,
+                &mut context,
+                // &mut other_pipe_sender
+            ).await?;
 
             // Write all to sink
             while !write_buf.is_empty() {
@@ -95,8 +95,8 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
                 if let Ok(Some(packet)) = h.parse(&mut packet_buf) {
                     self.trace("Processing packet".to_string());
                     transformed_packet = match self.direction {
-                        Direction::Forward => h.process_incoming(&packet, &context).await?,
-                        Direction::Backward => h.process_outgoing(&packet, &context).await?,
+                        Direction::Forward => h.process_incoming(&packet, context).await?,
+                        Direction::Backward => h.process_outgoing(&packet, context).await?,
                     };
                     self.trace(format!("Transformed packet: {:?}", transformed_packet));
                 } else {
