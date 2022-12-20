@@ -74,6 +74,82 @@ impl<T,P,F,X,E,R> PrewRuleSet<T,P,F,X,E,R> where
             packet_type: PhantomData,
         }
     }
+
+    pub fn with_reporter<RN>(&self, new_reporter: &RN) -> PrewRuleSet<T, P, F, X, E, RN>
+        where RN : Reporter<T> + Clone
+    {
+        PrewRuleSet::new(
+            &self.parser.clone(),
+            &self.filter.clone(),
+            &self.transformer.clone(),
+            &self.encoder.clone(),
+            new_reporter
+        )
+    }
+
+    pub fn with_filter<FN>(&self, new_filter: &FN) -> PrewRuleSet<T, P, FN, X, E, R>
+        where FN : Filter<T> + Clone
+    {
+        PrewRuleSet::new(
+            &self.parser.clone(),
+            new_filter,
+            &self.transformer.clone(),
+            &self.encoder.clone(),
+            &self.reporter.clone()
+        )
+    }
+
+    pub fn with_transformer<XN>(&self, new_transformer: &XN) -> PrewRuleSet<T, P, F, XN, E, R>
+        where XN : Transformer<T> + Clone
+    {
+        PrewRuleSet::new(
+            &self.parser.clone(),
+            &self.filter.clone(),
+            new_transformer,
+            &self.encoder.clone(),
+            &self.reporter.clone()
+        )
+    }
+}
+
+
+impl<T,P,E> PrewRuleSet<T, P, NoFilter<T>, NoTransform<T>, E, NoReport<T>>
+    where T : Clone + Sync, P : Parser<T> + Clone, E : Encoder<T> + Clone
+{
+    pub fn minimal(parser: &P, encoder: &E) -> PrewRuleSet<
+        T,
+        P,
+        NoFilter<T>,
+        NoTransform<T>,
+        E,
+        NoReport<T>
+    > {
+        PrewRuleSet::new(
+            parser,
+            &NoFilter::new(),
+            &NoTransform::new(),
+            encoder,
+            &NoReport::new(),
+        )
+    }
+}
+
+#[derive(Clone)]
+pub struct NoParserEncoder {}
+impl NoParserEncoder {
+    pub fn new() -> NoParserEncoder {
+        NoParserEncoder {}
+    }
+}
+impl Parser<Packet> for NoParserEncoder {
+    fn parse(&self, packet: &Packet) -> Result<Packet> {
+        Ok(packet.clone())
+    }
+}
+impl Encoder<Packet> for NoParserEncoder {
+    fn encode(&self, message: &Packet) -> Result<Packet> {
+        Ok(message.clone())
+    }
 }
 
 #[derive(Clone)]
