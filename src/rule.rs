@@ -4,7 +4,8 @@ use anyhow::Result;
 
 use async_trait::async_trait;
 
-use crate::packet::{Direction, Packet};
+use crate::packet::{Direction, Packet, PacketProcessor};
+use crate::read_postgresql_packet;
 
 // FIXME: make Context generic
 pub struct Context {
@@ -119,6 +120,42 @@ impl<T,P,F,X,E,R> PrewRuleSet<T,P,F,X,E,R> where
             &self.encoder.clone(),
             &self.reporter.clone()
         )
+    }
+}
+
+#[async_trait]
+impl<T,P,F,X,E,R> PacketProcessor for PrewRuleSet<T, P, F, X, E, R> where
+    T : Clone + Sync + Send,
+    P : Parser<T> + Clone + Sync + Send,
+    F : Filter<T> + Clone + Sync + Send,
+    X : Transformer<T> + Clone + Sync + Send,
+    E : Encoder<T> + Clone + Sync + Send,
+    R : Reporter<T> + Clone + Sync + Send,
+{
+    fn parse(&self, packet_buf: &mut Vec<u8>) -> Result<Option<Packet>> {
+        // FIXME: assuming Postgres type packets
+        read_postgresql_packet(packet_buf)
+    }
+
+    async fn process_incoming(&self, packet: &Packet, context: &mut Context) -> Result<Option<Packet>> {
+        let parsed = self.parser.parse(packet, context)?;
+        self.reporter.report(&parsed, Direction::Forward, context).await?;
+        if self.filter.filter(&parsed) {
+            let transformed = self.transformer.transform(&parsed)?;
+            let encoded = self.encoder.encode(&transformed)?;
+            Ok(Some(encoded))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn process_outgoing(&self, packet: &Packet, context: &mut Context) -> Result<Option<Packet>> {
+        self.reporter.report(
+            &self.parser.parse(packet, context)?,
+            Direction::Backward,
+            context
+        ).await?;
+        Ok(Some(packet.clone()))
     }
 }
 

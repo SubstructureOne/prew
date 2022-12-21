@@ -1,6 +1,6 @@
 mod pipe;
 mod packet;
-mod postgresql;
+pub mod postgresql;
 mod rule;
 
 use std::sync::Arc;
@@ -13,9 +13,13 @@ use log::{debug, info, trace};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::pipe::Pipe;
-use packet::{Direction, PacketProcessor};
-pub use crate::postgresql::{PostgresqlPacket, PostgresqlProcessor};
+use packet::{Direction};
 
+pub use crate::postgresql::{PostgresqlPacket, PostgresqlProcessor, PostgresqlReporter, read_postgresql_packet};
+pub use crate::postgresql::{PostgresParser, AppendDbNameTransformer};
+pub use crate::rule::{PrewRuleSet, NoFilter, NoReport, MessageEncoder, NoTransform};
+pub use crate::rule::{Parser, Filter, Transformer, Encoder, Reporter};
+pub use crate::packet::{PacketProcessor};
 
 pub struct PacketRules {
     pub bind_addr: String,

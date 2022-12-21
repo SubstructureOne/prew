@@ -5,6 +5,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
 use log::{trace};
+use postgres_types::ToSql;
 use serde::{Serialize};
 
 use crate::{
@@ -24,6 +25,11 @@ pub const POSTGRES_IDS: [char; 31] = [
 
 #[derive(Clone)]
 pub struct PostgresParser {}
+impl PostgresParser {
+    pub fn new() -> PostgresParser {
+        PostgresParser {}
+    }
+}
 impl Parser<PostgresqlPacket> for PostgresParser {
     fn parse(&self, packet: &Packet, context: &mut Context) -> Result<PostgresqlPacket> {
         let packet_type = packet.bytes[0] as char;
@@ -214,7 +220,11 @@ impl StartupMessage {
 pub struct AppendDbNameTransformer {
     append: String
 }
-
+impl AppendDbNameTransformer {
+    pub fn new<S: Into<String>>(append: S) -> AppendDbNameTransformer {
+        AppendDbNameTransformer { append: append.into() }
+    }
+}
 impl Transformer<PostgresqlPacket> for AppendDbNameTransformer {
     fn transform(&self, packet: &PostgresqlPacket) -> Result<PostgresqlPacket> {
         if let PostgresqlPacketInfo::Startup(message) = &packet.info {
@@ -299,6 +309,25 @@ pub enum PostgresqlPacketInfo {
     Startup(StartupMessage),
     Query(QueryMessage),
     Other,
+}
+
+
+// only for SQL conversion
+#[derive(Debug, ToSql)]
+#[postgres(name="pgpkttype")]
+pub enum PostgresqlPacketType {
+    Startup,
+    Query,
+    Other
+}
+impl PostgresqlPacketType {
+    pub fn from_info(info: &PostgresqlPacketInfo) -> PostgresqlPacketType {
+        match info {
+            PostgresqlPacketInfo::Startup(_) => PostgresqlPacketType::Startup,
+            PostgresqlPacketInfo::Query(_) => PostgresqlPacketType::Query,
+            PostgresqlPacketInfo::Other => PostgresqlPacketType::Other,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -399,54 +428,53 @@ impl PostgresqlProcessor<
     }
 }
 
-#[async_trait]
-impl<F,X,E,R> PacketProcessor for PostgresqlProcessor<F,X,E,R> where
-    F : Filter<PostgresqlPacket> + Clone + Sync + Send,
-    X : Transformer<PostgresqlPacket> + Clone + Sync + Send,
-    E : Encoder<PostgresqlPacket> + Clone + Sync + Send,
-    R : Reporter<PostgresqlPacket> + Clone + Sync + Send,
-{
-    fn parse(&self, packet_buf: &mut Vec<u8>) -> Result<Option<Packet>> {
-        return read_postgresql_packet(packet_buf);
-    }
-
-    async fn process_incoming(&self, packet: &Packet, context: &mut Context) -> Result<Option<Packet>> {
-        let rules = &self.rules;
-        let parsed = rules.parser.parse(packet, context)?;
-        rules.reporter.report(&parsed, Direction::Forward, context).await?;
-        if rules.filter.filter(&parsed) {
-            let transformed = rules.transformer.transform(&parsed)?;
-            let encoded = rules.encoder.encode(&transformed)?;
-            Ok(Some(encoded))
-        } else {
-            Ok(None)
-        }
-    }
-
-    async fn process_outgoing(&self, packet: &Packet, context: &mut Context) -> Result<Option<Packet>> {
-        self.rules.reporter.report(
-            &PostgresqlPacket::new(PostgresqlPacketInfo::Other, Some(packet.bytes.clone())),
-            Direction::Backward,
-            context
-        ).await?;
-        Ok(Some(packet.clone()))
-    }
-}
+// #[async_trait]
+// impl<F,X,E,R> PacketProcessor for PostgresqlProcessor<F,X,E,R> where
+//     F : Filter<PostgresqlPacket> + Clone + Sync + Send,
+//     X : Transformer<PostgresqlPacket> + Clone + Sync + Send,
+//     E : Encoder<PostgresqlPacket> + Clone + Sync + Send,
+//     R : Reporter<PostgresqlPacket> + Clone + Sync + Send,
+// {
+//     fn parse(&self, packet_buf: &mut Vec<u8>) -> Result<Option<Packet>> {
+//         return read_postgresql_packet(packet_buf);
+//     }
+//
+//     async fn process_incoming(&self, packet: &Packet, context: &mut Context) -> Result<Option<Packet>> {
+//         let rules = &self.rules;
+//         let parsed = rules.parser.parse(packet, context)?;
+//         rules.reporter.report(&parsed, Direction::Forward, context).await?;
+//         if rules.filter.filter(&parsed) {
+//             let transformed = rules.transformer.transform(&parsed)?;
+//             let encoded = rules.encoder.encode(&transformed)?;
+//             Ok(Some(encoded))
+//         } else {
+//             Ok(None)
+//         }
+//     }
+//
+//     async fn process_outgoing(&self, packet: &Packet, context: &mut Context) -> Result<Option<Packet>> {
+//         self.rules.reporter.report(
+//             &PostgresqlPacket::new(PostgresqlPacketInfo::Other, Some(packet.bytes.clone())),
+//             Direction::Backward,
+//             context
+//         ).await?;
+//         Ok(Some(packet.clone()))
+//     }
+// }
 
 
 #[derive(Clone)]
-pub struct PostgreSQLReporter {
+pub struct PostgresqlReporter {
     config: String
 }
 
-impl PostgreSQLReporter {
-    pub fn new<S: Into<String>>(config: S) -> PostgreSQLReporter {
-        PostgreSQLReporter { config: config.into() }
+impl PostgresqlReporter {
+    pub fn new<S: Into<String>>(config: S) -> PostgresqlReporter {
+        PostgresqlReporter { config: config.into() }
     }
 }
-
 #[async_trait]
-impl Reporter<PostgresqlPacket> for PostgreSQLReporter {
+impl Reporter<PostgresqlPacket> for PostgresqlReporter {
     async fn report(
             &self,
             message: &PostgresqlPacket,
@@ -462,24 +490,16 @@ impl Reporter<PostgresqlPacket> for PostgreSQLReporter {
                 println!("Connection error: {}", e);
             }
         });
-        let direction_str = match direction {
-            Direction::Forward => "Forward",
-            Direction::Backward => "Backward",
-        };
-        let message_type = match message.info {
-            PostgresqlPacketInfo::Startup(_) => "Startup",
-            PostgresqlPacketInfo::Query(_) => "Query",
-            PostgresqlPacketInfo::Other => "Other",
-        };
-        let packet_info = serde_json::to_string(&message.info).unwrap();
+        // let packet_info = serde_json::to_string(&message.info).unwrap();
+        let packet_info = serde_json::to_value(&message.info)?;
         let rowcount = client.execute(
             "INSERT INTO reports
              (username, packet_type, direction, packet_info, packet_bytes)
-             VALUES ($1, $2, $3, $r)",
+             VALUES ($1, $2, $3, $4, $5)",
             &[
                 &context.username,
-                &message_type,
-                &direction_str,
+                &PostgresqlPacketType::from_info(&message.info),
+                &direction,
                 &packet_info,
                 &message.bytes
             ]

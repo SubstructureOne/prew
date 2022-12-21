@@ -4,10 +4,12 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 
 use serde::{Serialize, Deserialize};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use log::{warn, info};
 
-use prew::{RewriteReverseProxy, PostgresqlProcessor, PacketRules};
+use prew::{RewriteReverseProxy, PacketRules, PostgresqlReporter, PrewRuleSet, NoFilter, MessageEncoder};
+use prew::{PostgresParser, AppendDbNameTransformer, NoReport, NoTransform, PacketProcessor};
+// use prew::{Parser, Filter, Transformer, Encoder, Reporter};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AppendInfo {
@@ -70,6 +72,7 @@ fn read_config() -> Result<PrewConfig> {
     Ok(cfg_data)
 }
 
+
 #[tokio::main]
 async fn main() -> Result<()>{
     env_logger::init();
@@ -84,27 +87,48 @@ async fn main() -> Result<()>{
     }
     // let (_tx, rx) = oneshot::channel();
     // let processor = PostgresqlProcessor::passthru();
-    info!("Starting proxy");
+    let mut proxy = RewriteReverseProxy::new();
+
+    let processor: Arc<dyn PacketProcessor + Send + Sync>;
     if let ProxyMode::DbAppend(appendinfo) = config.mode {
-        let mut proxy = RewriteReverseProxy::new();
-        let processor = PostgresqlProcessor::appenddbname(appendinfo.append);
-        let rules = PacketRules {
-            bind_addr: config.bind_addr,
-            server_addr: config.server_addr,
-            processor: Arc::new(processor),
-        };
-        proxy.add_proxy(Box::new(rules)).await;
-        proxy.run().await;
+        let rules = PrewRuleSet::new(
+            &PostgresParser::new(),
+            &NoFilter::new(),
+            &AppendDbNameTransformer::new(appendinfo.append),
+            &MessageEncoder::new(),
+            &NoReport::new(),
+        );
+        if let Ok(reporter_connstr) = env::var("PREW_REPORTER_CONNSTR") {
+            let reporter = PostgresqlReporter::new(reporter_connstr);
+            processor = Arc::new(rules.with_reporter(&reporter));
+        } else {
+            processor = Arc::new(rules);
+        }
     } else if let ProxyMode::Passthru = config.mode {
-        let mut proxy = RewriteReverseProxy::new();
-        let processor = PostgresqlProcessor::passthru();
-        let rules = PacketRules {
-            bind_addr: config.bind_addr,
-            server_addr: config.server_addr,
-            processor: Arc::new(processor),
-        };
-        proxy.add_proxy(Box::new(rules)).await;
-        proxy.run().await;
+        let rules = PrewRuleSet::new(
+            &PostgresParser::new(),
+            &NoFilter::new(),
+            &NoTransform::new(),
+            &MessageEncoder::new(),
+            &NoReport::new(),
+        );
+        if let Ok(reporter_connstr) = env::var("PREW_REPORTER_CONNSTR") {
+            let reporter = PostgresqlReporter::new(reporter_connstr);
+            processor = Arc::new(rules.with_reporter(&reporter));
+        } else {
+            processor = Arc::new(rules);
+        }
+    } else {
+        return Err(anyhow!("Unknown config mode: {:?}", config.mode));
     }
+
+    let rules = PacketRules {
+        bind_addr: config.bind_addr,
+        server_addr: config.server_addr,
+        processor,
+    };
+    proxy.add_proxy(Box::new(rules)).await;
+    info!("Starting proxy");
+    proxy.run().await;
     Ok(())
 }

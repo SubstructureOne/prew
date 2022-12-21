@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use postgres_types::ToSql;
 
 use crate::rule::Context;
 
@@ -22,7 +23,8 @@ pub trait PacketProcessor {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, ToSql)]
+#[postgres(name="pktdirection")]
 pub enum Direction {
     Forward,  // corresponds to handle_request
     Backward, // corresponds to handle_response

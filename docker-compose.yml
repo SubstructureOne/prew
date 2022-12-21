@@ -17,6 +17,7 @@ services:
       - PREW_BIND_ADDR=0.0.0.0:5432
       - PREW_SERVER_ADDR=postgres:5432
       - RUST_LOG=debug
+      -
     command:
       prew
     depends_on:
