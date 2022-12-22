@@ -129,6 +129,7 @@ async fn main() -> Result<()>{
     };
     proxy.add_proxy(Box::new(rules)).await;
     info!("Starting proxy");
-    proxy.run().await;
+    let reporter_connstr = env::var("PREW_REPORTER_CONNSTR").unwrap();
+    proxy.run(reporter_connstr).await;
     Ok(())
 }

@@ -1,9 +1,10 @@
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use anyhow::Result;
-
 use async_trait::async_trait;
 use tokio::sync::RwLock;
+use tokio_postgres::Client;
 
 use crate::packet::{Direction, Packet, PacketProcessor};
 use crate::read_postgresql_packet;
@@ -11,17 +12,21 @@ use crate::read_postgresql_packet;
 // FIXME: make Context generic
 #[derive(Debug)]
 pub struct Context {
-    pub username: Option<String>
+    pub username: RwLock<Option<String>>,
+    pub client: Arc<Client>,
 }
 impl Context {
-    pub fn new() -> Context {
-        Context { username: None }
+    pub fn new(client: Client) -> Context {
+        Context {
+            username: RwLock::new(None),
+            client: Arc::new(client),
+        }
     }
 }
 
 #[async_trait]
 pub trait Parser<T> {
-    async fn parse(&self, packet: &Packet, context: &RwLock<Context>) -> Result<T>;
+    async fn parse(&self, packet: &Packet, context: &Context) -> Result<T>;
 }
 
 pub trait Filter<T> {
@@ -38,7 +43,7 @@ pub trait Encoder<T> {
 
 #[async_trait]
 pub trait Reporter<T> {
-    async fn report(&self, message: &T, direction: Direction, context: &RwLock<Context>) -> Result<()>;
+    async fn report(&self, message: &T, direction: Direction, context: &Context) -> Result<()>;
 }
 
 #[derive(Clone)]
@@ -140,7 +145,7 @@ impl<T,P,F,X,E,R> PacketProcessor for PrewRuleSet<T, P, F, X, E, R> where
         read_postgresql_packet(packet_buf)
     }
 
-    async fn process_incoming(&self, packet: &Packet, context: &RwLock<Context>) -> Result<Option<Packet>> {
+    async fn process_incoming(&self, packet: &Packet, context: &Context) -> Result<Option<Packet>> {
         let parsed = self.parser.parse(packet, context).await?;
         self.reporter.report(&parsed, Direction::Forward, context).await?;
         if self.filter.filter(&parsed) {
@@ -152,7 +157,7 @@ impl<T,P,F,X,E,R> PacketProcessor for PrewRuleSet<T, P, F, X, E, R> where
         }
     }
 
-    async fn process_outgoing(&self, packet: &Packet, context: &RwLock<Context>) -> Result<Option<Packet>> {
+    async fn process_outgoing(&self, packet: &Packet, context: &Context) -> Result<Option<Packet>> {
         self.reporter.report(
             &self.parser.parse(packet, context).await?,
             Direction::Backward,
@@ -194,7 +199,7 @@ impl NoParserEncoder {
 }
 #[async_trait]
 impl Parser<Packet> for NoParserEncoder {
-    async fn parse(&self, packet: &Packet, _context: &RwLock<Context>) -> Result<Packet> {
+    async fn parse(&self, packet: &Packet, _context: &Context) -> Result<Packet> {
         Ok(packet.clone())
     }
 }
@@ -240,7 +245,7 @@ pub struct NoReport<T: Sync> {
 }
 #[async_trait]
 impl<T: Sync> Reporter<T> for NoReport<T> {
-    async fn report(&self, _message: &T, _direction: Direction, _context: &RwLock<Context>) -> Result<()> {
+    async fn report(&self, _message: &T, _direction: Direction, _context: &Context) -> Result<()> {
         Ok(())
     }
 }

@@ -33,7 +33,7 @@ impl PostgresParser {
 }
 #[async_trait]
 impl Parser<PostgresqlPacket> for PostgresParser {
-    async fn parse(&self, packet: &Packet, context: &RwLock<Context>) -> Result<PostgresqlPacket> {
+    async fn parse(&self, packet: &Packet, context: &Context) -> Result<PostgresqlPacket> {
         let packet_type = packet.bytes[0] as char;
         let info;
         if POSTGRES_IDS.contains(&packet_type) {
@@ -49,7 +49,8 @@ impl Parser<PostgresqlPacket> for PostgresParser {
                 let msg = StartupMessage::new(&packet.bytes);
                 // FIXME: only store the username once the user is authenticated
                 if let Some(username) = msg.get_parameter("user") {
-                    context.write().await.username = Some(username)
+                    let mut uname_guard = context.username.write().await;
+                    *uname_guard = Some(username);
                 }
                 info = PostgresqlPacketInfo::Startup(msg);
             } else {
@@ -481,34 +482,40 @@ impl Reporter<PostgresqlPacket> for PostgresqlReporter {
             &self,
             message: &PostgresqlPacket,
             direction: Direction,
-            context: &RwLock<Context>
+            context: &Context,
     ) -> Result<()> {
-        let (client, conn) = tokio_postgres::connect(
-            &self.config,
-            tokio_postgres::NoTls
-        ).await?;
-        tokio::spawn(async move {
-            if let Err(e) = conn.await {
-                println!("Connection error: {}", e);
-            }
-        });
+        // let (client, conn) = tokio_postgres::connect(
+        //     &self.config,
+        //     tokio_postgres::NoTls
+        // ).await?;
+        // tokio::spawn(async move {
+        //     if let Err(e) = conn.await {
+        //         println!("Connection error: {}", e);
+        //     }
+        // });
         // let packet_info = serde_json::to_string(&message.info).unwrap();
         let packet_info = serde_json::to_value(&message.info)?;
-        let rowcount = client.execute(
-            "INSERT INTO reports
+        let bytes = message.bytes.clone();
+        let packet_type = PostgresqlPacketType::from_info(&message.info);
+        let username = context.username.read().await.clone();
+        let client = context.client.clone();
+        let handle = tokio::spawn(async move {
+            let rowcount = client.execute(
+                "INSERT INTO reports
              (username, packet_type, direction, packet_info, packet_bytes)
              VALUES ($1, $2, $3, $4, $5)",
-            &[
-                &context.read().await.username,
-                &PostgresqlPacketType::from_info(&message.info),
-                &direction,
-                &packet_info,
-                &message.bytes
-            ]
-        ).await;
-        if let Err(error) = rowcount {
-            error!("Unable to report on packet: {:?} - {:?}", &packet_info, &error);
-        }
+                &[
+                    &username,
+                    &packet_type,
+                    &direction,
+                    &packet_info,
+                    &bytes
+                ]
+            ).await;
+            if let Err(error) = rowcount {
+                error!("Unable to report on packet: {:?} - {:?}", &packet_info, &error);
+            }
+        });
         Ok(())
     }
 }

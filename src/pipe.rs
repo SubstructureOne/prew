@@ -6,7 +6,6 @@ use std::{
 use anyhow::{Result, anyhow};
 use log::{error, trace, warn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::RwLock;
 
 use crate::packet::{Direction, Packet, PacketProcessor};
 use crate::rule::Context;
@@ -16,7 +15,7 @@ pub struct Pipe<'a, T: AsyncReadExt, U: AsyncWriteExt> {
     name: String,
     packet_handler: Arc<dyn PacketProcessor + Send + Sync>,
     direction: Direction,
-    context: &'a RwLock<Context>,
+    context: &'a Context,
     source: T,
     sink: U,
 }
@@ -28,7 +27,7 @@ impl<'a, T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<'a, T, U> {
         direction: Direction,
         reader: T,
         writer: U,
-        context: &RwLock<Context>,
+        context: &Context,
     ) -> Pipe<T, U> {
         Pipe {
             name,
@@ -77,7 +76,7 @@ impl<'a, T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<'a, T, U> {
         read_buf: &[u8],
         mut packet_buf: &mut Vec<u8>,
         write_buf: &mut Vec<u8>,
-        context: &RwLock<Context>,
+        context: &Context,
         // other_pipe_sender: &mut Sender<Packet>,
     ) -> Result<()> {
         if n == 0 {
