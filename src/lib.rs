@@ -11,6 +11,7 @@ use futures::{
 use futures::future::select_all;
 use log::{debug, info, trace};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::RwLock;
 
 use crate::pipe::Pipe;
 use packet::{Direction};
@@ -20,6 +21,7 @@ pub use crate::postgresql::{PostgresParser, AppendDbNameTransformer};
 pub use crate::rule::{PrewRuleSet, NoFilter, NoReport, MessageEncoder, NoTransform};
 pub use crate::rule::{Parser, Filter, Transformer, Encoder, Reporter};
 pub use crate::packet::{PacketProcessor};
+use crate::rule::Context;
 
 pub struct PacketRules {
     pub bind_addr: String,
@@ -80,12 +82,14 @@ impl RewriteReverseProxy where {
                 .unwrap_or_else(|_| panic!("Connecting to SQL database ({}) failed", db_addr));
             let (server_reader, server_writer) = server_socket.split();
             let (client_reader, client_writer) = client_socket.split();
+            let context = RwLock::new(Context::new());
             let mut forward_pipe = Pipe::new(
                 client_addr.clone(),
                 handler_ref.clone(),
                 Direction::Forward,
                 client_reader,
                 server_writer,
+                &context,
             );
             let mut backward_pipe = Pipe::new(
                 client_addr.clone(),
@@ -93,6 +97,7 @@ impl RewriteReverseProxy where {
                 Direction::Backward,
                 server_reader,
                 client_writer,
+                &context,
             );
 
             trace!("Server.create_pipes: starting forward/backwards pipes");

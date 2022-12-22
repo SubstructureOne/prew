@@ -6,31 +6,35 @@ use std::{
 use anyhow::{Result, anyhow};
 use log::{error, trace, warn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::RwLock;
 
 use crate::packet::{Direction, Packet, PacketProcessor};
 use crate::rule::Context;
 
 
-pub struct Pipe<T: AsyncReadExt, U: AsyncWriteExt> {
+pub struct Pipe<'a, T: AsyncReadExt, U: AsyncWriteExt> {
     name: String,
     packet_handler: Arc<dyn PacketProcessor + Send + Sync>,
     direction: Direction,
+    context: &'a RwLock<Context>,
     source: T,
     sink: U,
 }
 
-impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
+impl<'a, T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<'a, T, U> {
     pub fn new(
         name: String,
         packet_handler: Arc<dyn PacketProcessor + Send + Sync>,
         direction: Direction,
         reader: T,
         writer: U,
+        context: &RwLock<Context>,
     ) -> Pipe<T, U> {
         Pipe {
             name,
             packet_handler,
             direction,
+            context,
             source: reader,
             sink: writer,
         }
@@ -45,7 +49,6 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
         let mut read_buf: Vec<u8> = vec![0_u8; 4096];
         let mut packet_buf: Vec<u8> = Vec::with_capacity(4096);
         let mut write_buf: Vec<u8> = Vec::with_capacity(4096);
-        let mut context = Context::new();
 
         loop {
             let read_result = self.source.read(&mut read_buf[..]).await?;
@@ -54,9 +57,10 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
                 &read_buf,
                 &mut packet_buf,
                 &mut write_buf,
-                &mut context,
+                self.context,
                 // &mut other_pipe_sender
             ).await?;
+            trace!("Context is now {:?}", self.context);
 
             // Write all to sink
             while !write_buf.is_empty() {
@@ -73,7 +77,7 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
         read_buf: &[u8],
         mut packet_buf: &mut Vec<u8>,
         write_buf: &mut Vec<u8>,
-        context: &mut Context,
+        context: &RwLock<Context>,
         // other_pipe_sender: &mut Sender<Packet>,
     ) -> Result<()> {
         if n == 0 {

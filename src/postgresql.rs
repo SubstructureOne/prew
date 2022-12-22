@@ -4,9 +4,10 @@ use std::ops::Deref;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
-use log::{trace};
+use log::{error, trace};
 use postgres_types::ToSql;
 use serde::{Serialize};
+use tokio::sync::RwLock;
 
 use crate::{
     packet::{Packet},
@@ -30,8 +31,9 @@ impl PostgresParser {
         PostgresParser {}
     }
 }
+#[async_trait]
 impl Parser<PostgresqlPacket> for PostgresParser {
-    fn parse(&self, packet: &Packet, context: &mut Context) -> Result<PostgresqlPacket> {
+    async fn parse(&self, packet: &Packet, context: &RwLock<Context>) -> Result<PostgresqlPacket> {
         let packet_type = packet.bytes[0] as char;
         let info;
         if POSTGRES_IDS.contains(&packet_type) {
@@ -47,7 +49,7 @@ impl Parser<PostgresqlPacket> for PostgresParser {
                 let msg = StartupMessage::new(&packet.bytes);
                 // FIXME: only store the username once the user is authenticated
                 if let Some(username) = msg.get_parameter("user") {
-                    context.username = Some(username)
+                    context.write().await.username = Some(username)
                 }
                 info = PostgresqlPacketInfo::Startup(msg);
             } else {
@@ -276,7 +278,7 @@ impl QueryMessage {
         }
         let query = String::from_utf8_lossy(&bytes[5..bytes.len()]).into_owned();
         QueryMessage {
-            query,
+            query: query.trim_end_matches("\0").to_owned()
         }
     }
 }
@@ -479,7 +481,7 @@ impl Reporter<PostgresqlPacket> for PostgresqlReporter {
             &self,
             message: &PostgresqlPacket,
             direction: Direction,
-            context: &Context
+            context: &RwLock<Context>
     ) -> Result<()> {
         let (client, conn) = tokio_postgres::connect(
             &self.config,
@@ -497,13 +499,16 @@ impl Reporter<PostgresqlPacket> for PostgresqlReporter {
              (username, packet_type, direction, packet_info, packet_bytes)
              VALUES ($1, $2, $3, $4, $5)",
             &[
-                &context.username,
+                &context.read().await.username,
                 &PostgresqlPacketType::from_info(&message.info),
                 &direction,
                 &packet_info,
                 &message.bytes
             ]
-        ).await?;
+        ).await;
+        if let Err(error) = rowcount {
+            error!("Unable to report on packet: {:?} - {:?}", &packet_info, &error);
+        }
         Ok(())
     }
 }
