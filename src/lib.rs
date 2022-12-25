@@ -12,7 +12,6 @@ use futures::{
 use futures::future::select_all;
 use log::{debug, info, trace};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::RwLock;
 
 use crate::pipe::Pipe;
 use packet::{Direction};

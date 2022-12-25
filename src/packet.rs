@@ -1,6 +1,5 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use tokio::sync::RwLock;
 use postgres_types::ToSql;
 
 use crate::rule::Context;

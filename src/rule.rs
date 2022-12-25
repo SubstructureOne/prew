@@ -9,16 +9,28 @@ use tokio_postgres::Client;
 use crate::packet::{Direction, Packet, PacketProcessor};
 use crate::read_postgresql_packet;
 
+
+#[derive(Debug)]
+pub struct AuthenticationContext {
+    pub username: Option<String>,
+    pub authenticated: bool,
+}
+impl AuthenticationContext {
+    pub fn new() -> AuthenticationContext {
+        AuthenticationContext { username: None, authenticated: false }
+    }
+}
+
 // FIXME: make Context generic
 #[derive(Debug)]
 pub struct Context {
-    pub username: RwLock<Option<String>>,
+    pub authinfo: RwLock<AuthenticationContext>,
     pub client: Arc<Client>,
 }
 impl Context {
     pub fn new(client: Client) -> Context {
         Context {
-            username: RwLock::new(None),
+            authinfo: RwLock::new(AuthenticationContext::new()),
             client: Arc::new(client),
         }
     }

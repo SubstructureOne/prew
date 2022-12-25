@@ -39,18 +39,25 @@ impl Parser<PostgresqlPacket> for PostgresParser {
         if POSTGRES_IDS.contains(&packet_type) {
             if packet_type == 'Q' {
                 info = PostgresqlPacketInfo::Query(QueryMessage::new(&packet.bytes))
+            } else if packet_type == 'R' {
+                if packet.bytes.len() == 8 && BigEndian::read_u32(&packet.bytes[5..9]) == 0 {
+                    info = PostgresqlPacketInfo::Authentication(AuthenticationMessage::AuthenticationOk);
+                    let mut auth_guard = context.authinfo.write().await;
+                    (*auth_guard).authenticated = true;
+                } else {
+                    info = PostgresqlPacketInfo::Authentication(AuthenticationMessage::Other);
+                }
             } else {
-                info = PostgresqlPacketInfo::Other
+                info = PostgresqlPacketInfo::Other;
             }
         } else {
             if packet.bytes.len() >= 8
                 && BigEndian::read_u32(&packet.bytes[4..8]) == 196_608
             {
                 let msg = StartupMessage::new(&packet.bytes);
-                // FIXME: only store the username once the user is authenticated
                 if let Some(username) = msg.get_parameter("user") {
-                    let mut uname_guard = context.username.write().await;
-                    *uname_guard = Some(username);
+                    let mut auth_guard = context.authinfo.write().await;
+                    (*auth_guard).username = Some(username);
                 }
                 info = PostgresqlPacketInfo::Startup(msg);
             } else {
@@ -127,6 +134,17 @@ pub struct StartupMessage {
     // length: u32,
     protocol_version: u32,
     parameters: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub enum AuthenticationMessage {
+    AuthenticationOk,
+    Other,
+}
+impl Encodable for AuthenticationMessage {
+    fn encode(&self) -> Result<Packet> {
+        Err(anyhow!("Encoding not supported for authentication packets"))
+    }
 }
 
 impl Encodable for StartupMessage {
@@ -311,6 +329,7 @@ impl Encodable for QueryMessage {
 pub enum PostgresqlPacketInfo {
     Startup(StartupMessage),
     Query(QueryMessage),
+    Authentication(AuthenticationMessage),
     Other,
 }
 
@@ -321,6 +340,7 @@ pub enum PostgresqlPacketInfo {
 pub enum PostgresqlPacketType {
     Startup,
     Query,
+    Auth,
     Other
 }
 impl PostgresqlPacketType {
@@ -328,6 +348,7 @@ impl PostgresqlPacketType {
         match info {
             PostgresqlPacketInfo::Startup(_) => PostgresqlPacketType::Startup,
             PostgresqlPacketInfo::Query(_) => PostgresqlPacketType::Query,
+            PostgresqlPacketInfo::Authentication(_) => PostgresqlPacketType::Auth,
             PostgresqlPacketInfo::Other => PostgresqlPacketType::Other,
         }
     }
@@ -353,6 +374,7 @@ impl Encodable for PostgresqlPacket {
             match &self.info {
                 PostgresqlPacketInfo::Startup(message) => message.encode(),
                 PostgresqlPacketInfo::Query(message) => message.encode(),
+                PostgresqlPacketInfo::Authentication(message) => message.encode(),
                 PostgresqlPacketInfo::Other => Err(anyhow!("Cannot encode 'other' messages"))
             }
         }
@@ -497,7 +519,13 @@ impl Reporter<PostgresqlPacket> for PostgresqlReporter {
         let packet_info = serde_json::to_value(&message.info)?;
         let bytes = message.bytes.clone();
         let packet_type = PostgresqlPacketType::from_info(&message.info);
-        let username = context.username.read().await.clone();
+        let authinfo = context.authinfo.read().await;
+        let username;
+        if authinfo.authenticated {
+            username = authinfo.username.clone();
+        } else {
+            username = None;
+        }
         let client = context.client.clone();
         let handle = tokio::spawn(async move {
             let rowcount = client.execute(
