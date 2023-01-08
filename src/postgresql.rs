@@ -4,7 +4,8 @@ use std::ops::Deref;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
-use log::{error, trace};
+use log::{debug, error, trace};
+use pg_query::NodeMut;
 use postgres_types::ToSql;
 use serde::{Serialize};
 use tokio::sync::RwLock;
@@ -264,6 +265,51 @@ impl Transformer<PostgresqlPacket> for AppendDbNameTransformer {
                 message.set_parameter("database", newdbname);
                 Ok(PostgresqlPacket { info: PostgresqlPacketInfo::Startup(message), bytes: None })
             }
+        } else if let PostgresqlPacketInfo::Query(message) = &packet.info {
+            let mut modified = false;
+            if let Ok(mut parsed) = pg_query::parse(&message.query) {
+                unsafe {
+                    for (node, _depth, _context) in parsed.protobuf.nodes_mut().into_iter() {
+                        match node {
+                            NodeMut::CreatedbStmt(dbinfo) => {
+                                let new_dbname = format!("{}{}", (*dbinfo).dbname, &self.append);
+                                debug!(
+                                    "Modifying '{}' to '{}' in '{}'",
+                                    (*dbinfo).dbname,
+                                    &new_dbname,
+                                    &message.query,
+                                );
+                                (*dbinfo).dbname = new_dbname;
+                                modified = true;
+                            },
+                            NodeMut::DropdbStmt(dbinfo) => {
+                                let new_dbname = format!("{}{}", (*dbinfo).dbname, &self.append);
+                                debug!(
+                                    "Modifying '{}' to '{}' in '{}'",
+                                    (*dbinfo).dbname,
+                                    &new_dbname,
+                                    &message.query,
+                                );
+                                (*dbinfo).dbname = new_dbname;
+                                modified = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if modified {
+                    let new_query = parsed.deparse()?;
+                    debug!("New query: {}", &new_query);
+                    Ok(PostgresqlPacket {
+                        info: PostgresqlPacketInfo::Query(QueryMessage::from_query(new_query)),
+                        bytes: None,
+                    })
+                } else {
+                    Ok(packet.clone())
+                }
+            } else {
+                Ok(packet.clone())
+            }
         } else {
             Ok(packet.clone())
         }
@@ -299,6 +345,10 @@ impl QueryMessage {
         QueryMessage {
             query: query.trim_end_matches("\0").to_owned()
         }
+    }
+
+    pub fn from_query(query: String) -> QueryMessage {
+        QueryMessage { query }
     }
 }
 
