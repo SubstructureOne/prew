@@ -1,0 +1,6 @@
+bind_addr = '0.0.0.0:6432'
+server_addr = 'postgres:5432'
+
+[mode]
+mode = 'DbAppend'
+append = '_abcd'
