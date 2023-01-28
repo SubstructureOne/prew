@@ -1,7 +1,7 @@
 mod pipe;
 mod packet;
 pub mod postgresql;
-mod rule;
+pub mod rule;
 
 use std::sync::Arc;
 

@@ -1,6 +1,6 @@
 [package]
 name = "prew"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["dek <dek@substructure.one>"]
 description = "Reverse rewrite proxy for PostgreSQL"
