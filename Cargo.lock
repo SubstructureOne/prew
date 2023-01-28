@@ -697,7 +697,7 @@ checksum = "5b40af805b3121feab8a3c29f04d8ad262fa8e0561883e7653e024ae4479e6de"
 
 [[package]]
 name = "prew"
-version = "0.1.1"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",

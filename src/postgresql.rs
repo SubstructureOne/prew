@@ -4,19 +4,17 @@ use std::ops::Deref;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
-use log::{debug, error, trace};
+use log::{debug, trace};
 use pg_query::NodeMut;
 use postgres_types::ToSql;
 use serde::{Serialize};
-use tokio::sync::RwLock;
 
 use crate::{
     packet::{Packet},
     rule::PrewRuleSet,
     rule::PacketTransformer,
 };
-use crate::packet::{Direction, PacketProcessor};
-use crate::rule::{NoFilter, NoTransform, Parser, Encodable, MessageEncoder, Transformer, NoReport, Context};
+use crate::rule::{NoFilter, NoTransform, Parser, Encodable, MessageEncoder, Transformer, NoReport, WithAuthenticationContext, DefaultContext};
 use crate::rule::{Encoder, Filter, Reporter};
 
 pub const POSTGRES_IDS: [char; 31] = [
@@ -26,15 +24,17 @@ pub const POSTGRES_IDS: [char; 31] = [
 
 
 #[derive(Clone)]
-pub struct PostgresParser {}
+pub struct PostgresParser {
+}
 impl PostgresParser {
     pub fn new() -> PostgresParser {
-        PostgresParser {}
+        PostgresParser {
+        }
     }
 }
 #[async_trait]
-impl Parser<PostgresqlPacket> for PostgresParser {
-    async fn parse(&self, packet: &Packet, context: &Context) -> Result<PostgresqlPacket> {
+impl<C> Parser<PostgresqlPacket,C> for PostgresParser where C : WithAuthenticationContext + Sync + Send {
+    fn parse(&self, packet: &Packet, context: &mut C) -> Result<PostgresqlPacket> {
         let packet_type = packet.bytes[0] as char;
         let info;
         if POSTGRES_IDS.contains(&packet_type) {
@@ -43,7 +43,7 @@ impl Parser<PostgresqlPacket> for PostgresParser {
             } else if packet_type == 'R' {
                 if packet.bytes.len() == 8 && BigEndian::read_u32(&packet.bytes[5..9]) == 0 {
                     info = PostgresqlPacketInfo::Authentication(AuthenticationMessage::AuthenticationOk);
-                    let mut auth_guard = context.authinfo.write().await;
+                    let mut auth_guard = context.authinfo();
                     (*auth_guard).authenticated = true;
                 } else {
                     info = PostgresqlPacketInfo::Authentication(AuthenticationMessage::Other);
@@ -57,7 +57,7 @@ impl Parser<PostgresqlPacket> for PostgresParser {
             {
                 let msg = StartupMessage::new(&packet.bytes);
                 if let Some(username) = msg.get_parameter("user") {
-                    let mut auth_guard = context.authinfo.write().await;
+                    let mut auth_guard = context.authinfo();
                     (*auth_guard).username = Some(username);
                 }
                 info = PostgresqlPacketInfo::Startup(msg);
@@ -122,9 +122,11 @@ pub struct PostgresqlProcessor<
     F: Filter<PostgresqlPacket> + Clone,
     X: Transformer<PostgresqlPacket> + Clone,
     E: Encoder<PostgresqlPacket> + Clone,
-    R: Reporter<PostgresqlPacket> + Clone,
+    R: Reporter<PostgresqlPacket, C> + Clone,
+    C: WithAuthenticationContext + Sync + Send,
+    CC: Fn() -> C,
 > {
-    rules: PrewRuleSet<PostgresqlPacket,PostgresParser,F,X,E,R>
+    rules: PrewRuleSet<PostgresqlPacket,PostgresParser,F,X,E,R,C,CC>
 }
 
 
@@ -406,8 +408,8 @@ impl PostgresqlPacketType {
 
 #[derive(Clone, Debug)]
 pub struct PostgresqlPacket {
-    info: PostgresqlPacketInfo,
-    bytes: Option<Vec<u8>>
+    pub info: PostgresqlPacketInfo,
+    pub bytes: Option<Vec<u8>>
 }
 
 impl PostgresqlPacket {
@@ -433,31 +435,37 @@ impl Encodable for PostgresqlPacket {
 
 
 
-impl<F,X,E,R> PostgresqlProcessor<F,X,E,R> where
+impl<F,X,E,R,C,CC> PostgresqlProcessor<F,X,E,R,C,CC> where
         F : Filter<PostgresqlPacket> + Clone,
         X : Transformer<PostgresqlPacket> + Clone,
         E : Encoder<PostgresqlPacket> + Clone,
-        R : Reporter<PostgresqlPacket> + Clone
+        R : Reporter<PostgresqlPacket, C> + Clone,
+        C : WithAuthenticationContext + Sync + Send,
+        CC : Fn() -> C,
 {
-    pub fn new(rules: PrewRuleSet<PostgresqlPacket, PostgresParser, F, X, E, R>) -> PostgresqlProcessor<F, X, E, R> {
+    pub fn new(rules: PrewRuleSet<PostgresqlPacket, PostgresParser, F, X, E, R, C, CC>) -> PostgresqlProcessor<F, X, E, R, C, CC> {
         PostgresqlProcessor { rules }
     }
 }
 
-impl PostgresqlProcessor<
+impl<CC> PostgresqlProcessor<
         NoFilter<PostgresqlPacket>,
         NoTransform<PostgresqlPacket>,
         MessageEncoder<PostgresqlPacket>,
         NoReport<PostgresqlPacket>,
-> {
+        DefaultContext,
+        CC
+> where CC : Fn() -> DefaultContext {
     pub fn passthru() -> PostgresqlProcessor<
         NoFilter<PostgresqlPacket>,
         NoTransform<PostgresqlPacket>,
         MessageEncoder<PostgresqlPacket>,
         NoReport<PostgresqlPacket>,
+        DefaultContext,
+        impl Fn() -> DefaultContext,
     > {
         let transformer = NoTransform::new();
-        let parser = PostgresParser {};
+        let parser = PostgresParser::new();
         let filter = NoFilter::new();
         let encoder = MessageEncoder::<PostgresqlPacket>::new();
         let reporter = NoReport::new();
@@ -468,25 +476,30 @@ impl PostgresqlProcessor<
                 &transformer,
                 &encoder,
                 &reporter,
+                &DefaultContext::new,
             )
         )
     }
 }
 
-impl PostgresqlProcessor<
+impl<CC> PostgresqlProcessor<
     NoFilter<PostgresqlPacket>,
     AppendDbNameTransformer,
     MessageEncoder<PostgresqlPacket>,
     NoReport<PostgresqlPacket>,
-> {
+    DefaultContext,
+    CC,
+> where CC: Fn() -> DefaultContext {
     pub fn appenddbname<S: Into<String>>(append: S) -> PostgresqlProcessor<
         NoFilter<PostgresqlPacket>,
         AppendDbNameTransformer,
         MessageEncoder<PostgresqlPacket>,
-        NoReport<PostgresqlPacket>
+        NoReport<PostgresqlPacket>,
+        DefaultContext,
+        impl Fn() -> DefaultContext,
     > {
         let appender = AppendDbNameTransformer { append: append.into() };
-        let parser = PostgresParser {};
+        let parser = PostgresParser::new();
         let filter = NoFilter::new();
         let encoder = MessageEncoder::new();
         // let reporter = PostgreSQLReporter::new("FIXME");
@@ -497,7 +510,8 @@ impl PostgresqlProcessor<
                 &filter,
                 &appender,
                 &encoder,
-                &reporter
+                &reporter,
+                &DefaultContext::new,
             )
         )
     }
@@ -538,62 +552,62 @@ impl PostgresqlProcessor<
 // }
 
 
-#[derive(Clone)]
-pub struct PostgresqlReporter {
-    config: String
-}
-
-impl PostgresqlReporter {
-    pub fn new<S: Into<String>>(config: S) -> PostgresqlReporter {
-        PostgresqlReporter { config: config.into() }
-    }
-}
-#[async_trait]
-impl Reporter<PostgresqlPacket> for PostgresqlReporter {
-    async fn report(
-            &self,
-            message: &PostgresqlPacket,
-            direction: Direction,
-            context: &Context,
-    ) -> Result<()> {
-        // let (client, conn) = tokio_postgres::connect(
-        //     &self.config,
-        //     tokio_postgres::NoTls
-        // ).await?;
-        // tokio::spawn(async move {
-        //     if let Err(e) = conn.await {
-        //         println!("Connection error: {}", e);
-        //     }
-        // });
-        // let packet_info = serde_json::to_string(&message.info).unwrap();
-        let packet_info = serde_json::to_value(&message.info)?;
-        let bytes = message.bytes.clone();
-        let packet_type = PostgresqlPacketType::from_info(&message.info);
-        let authinfo = context.authinfo.read().await;
-        let username;
-        if authinfo.authenticated {
-            username = authinfo.username.clone();
-        } else {
-            username = None;
-        }
-        let client = context.client.clone();
-        let handle = tokio::spawn(async move {
-            let rowcount = client.execute(
-                "INSERT INTO reports
-             (username, packet_type, direction, packet_info, packet_bytes)
-             VALUES ($1, $2, $3, $4, $5)",
-                &[
-                    &username,
-                    &packet_type,
-                    &direction,
-                    &packet_info,
-                    &bytes
-                ]
-            ).await;
-            if let Err(error) = rowcount {
-                error!("Unable to report on packet: {:?} - {:?}", &packet_info, &error);
-            }
-        });
-        Ok(())
-    }
-}
+// #[derive(Clone)]
+// pub struct PostgresqlReporter {
+//     config: String
+// }
+//
+// impl PostgresqlReporter {
+//     pub fn new<S: Into<String>>(config: S) -> PostgresqlReporter {
+//         PostgresqlReporter { config: config.into() }
+//     }
+// }
+// #[async_trait]
+// impl Reporter<PostgresqlPacket> for PostgresqlReporter {
+//     async fn report(
+//             &self,
+//             message: &PostgresqlPacket,
+//             direction: Direction,
+//             context: &Context,
+//     ) -> Result<()> {
+//         // let (client, conn) = tokio_postgres::connect(
+//         //     &self.config,
+//         //     tokio_postgres::NoTls
+//         // ).await?;
+//         // tokio::spawn(async move {
+//         //     if let Err(e) = conn.await {
+//         //         println!("Connection error: {}", e);
+//         //     }
+//         // });
+//         // let packet_info = serde_json::to_string(&message.info).unwrap();
+//         let packet_info = serde_json::to_value(&message.info)?;
+//         let bytes = message.bytes.clone();
+//         let packet_type = PostgresqlPacketType::from_info(&message.info);
+//         let authinfo = context.authinfo.read().await;
+//         let username;
+//         if authinfo.authenticated {
+//             username = authinfo.username.clone();
+//         } else {
+//             username = None;
+//         }
+//         let client = context.client.clone();
+//         let handle = tokio::spawn(async move {
+//             let rowcount = client.execute(
+//                 "INSERT INTO reports
+//              (username, packet_type, direction, packet_info, packet_bytes)
+//              VALUES ($1, $2, $3, $4, $5)",
+//                 &[
+//                     &username,
+//                     &packet_type,
+//                     &direction,
+//                     &packet_info,
+//                     &bytes
+//                 ]
+//             ).await;
+//             if let Err(error) = rowcount {
+//                 error!("Unable to report on packet: {:?} - {:?}", &packet_info, &error);
+//             }
+//         });
+//         Ok(())
+//     }
+// }

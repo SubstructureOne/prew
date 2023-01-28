@@ -1,5 +1,5 @@
 mod pipe;
-mod packet;
+pub mod packet;
 pub mod postgresql;
 pub mod rule;
 
@@ -10,23 +10,23 @@ use futures::{
     select,
 };
 use futures::future::select_all;
+use futures::lock::Mutex;
 use log::{debug, info, trace};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::pipe::Pipe;
 use packet::{Direction};
 
-pub use crate::postgresql::{PostgresqlPacket, PostgresqlProcessor, PostgresqlReporter, read_postgresql_packet};
+pub use crate::postgresql::{PostgresqlPacket, PostgresqlProcessor, read_postgresql_packet};
 pub use crate::postgresql::{PostgresParser, AppendDbNameTransformer};
 pub use crate::rule::{PrewRuleSet, NoFilter, NoReport, MessageEncoder, NoTransform};
 pub use crate::rule::{Parser, Filter, Transformer, Encoder, Reporter};
 pub use crate::packet::{PacketProcessor};
-use crate::rule::Context;
 
 pub struct PacketRules {
     pub bind_addr: String,
     pub server_addr: String,
-    pub processor: Arc<dyn PacketProcessor + Send + Sync>,
+    pub processor: Arc<Mutex<dyn PacketProcessor + Send>>,
 }
 
 
@@ -34,7 +34,7 @@ pub struct PacketRules {
 pub struct ProtocolProxy {
     server_addr: String,
     listener: TcpListener,
-    processor: Arc<dyn PacketProcessor + Send + Sync>,
+    processor: Arc<Mutex<dyn PacketProcessor + Send>>,
 }
 
 
@@ -43,7 +43,7 @@ pub struct RewriteReverseProxy {
 }
 
 
-impl RewriteReverseProxy where {
+impl RewriteReverseProxy {
     pub fn new() -> RewriteReverseProxy {
         RewriteReverseProxy {
             proxies: vec![]
@@ -64,8 +64,8 @@ impl RewriteReverseProxy where {
     async fn create_pipes(
         db_addr: String,
         mut client_socket: TcpStream,
-        handler_ref: Arc<dyn PacketProcessor + Send + Sync>,
-        connstr: String,
+        handler_ref: Arc<Mutex<dyn PacketProcessor + Send>>,
+        // connstr: String,
         // kill_switch_receiver: oneshot::Receiver<()>,
     ) {
         let client_addr = match client_socket.peer_addr() {
@@ -83,23 +83,12 @@ impl RewriteReverseProxy where {
                 .unwrap_or_else(|_| panic!("Connecting to SQL database ({}) failed", db_addr));
             let (server_reader, server_writer) = server_socket.split();
             let (client_reader, client_writer) = client_socket.split();
-            let (client, conn) = tokio_postgres::connect(
-                &connstr,
-                tokio_postgres::NoTls
-            ).await.unwrap_or_else(|_| panic!("Connecting to reporting db failed"));
-            tokio::spawn(async move {
-                if let Err(e) = conn.await {
-                    println!("Connection error: {}", e);
-                }
-            });
-            let context = Context::new(client);
             let mut forward_pipe = Pipe::new(
                 client_addr.clone(),
                 handler_ref.clone(),
                 Direction::Forward,
                 client_reader,
                 server_writer,
-                &context,
             );
             let mut backward_pipe = Pipe::new(
                 client_addr.clone(),
@@ -107,7 +96,6 @@ impl RewriteReverseProxy where {
                 Direction::Backward,
                 server_reader,
                 client_writer,
-                &context,
             );
 
             trace!("Server.create_pipes: starting forward/backwards pipes");
@@ -151,7 +139,6 @@ impl RewriteReverseProxy where {
                         self.proxies[idx].server_addr.clone(),
                         socket,
                         self.proxies[idx].processor.clone(),
-                        reporter_connstr.clone()
                         // rx,
                     ).await;
                     info!("new client")
