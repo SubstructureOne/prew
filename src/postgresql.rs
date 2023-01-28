@@ -406,8 +406,8 @@ impl PostgresqlPacketType {
 
 #[derive(Clone, Debug)]
 pub struct PostgresqlPacket {
-    info: PostgresqlPacketInfo,
-    bytes: Option<Vec<u8>>
+    pub info: PostgresqlPacketInfo,
+    pub bytes: Option<Vec<u8>>
 }
 
 impl PostgresqlPacket {

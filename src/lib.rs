@@ -1,5 +1,5 @@
 mod pipe;
-mod packet;
+pub mod packet;
 pub mod postgresql;
 pub mod rule;
 
