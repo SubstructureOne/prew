@@ -14,18 +14,7 @@ use crate::{
     rule::PrewRuleSet,
     rule::PacketTransformer,
 };
-use crate::packet::{SessionContext};
-use crate::rule::{
-    NoFilter,
-    NoTransform,
-    Parser,
-    Encodable,
-    MessageEncoder,
-    Transformer,
-    NoReport,
-    WithAuthenticationContext,
-    DefaultContext
-};
+use crate::rule::{NoFilter, NoTransform, Parser, Encodable, MessageEncoder, Transformer, NoReport, WithAuthenticationContext, DefaultContext};
 use crate::rule::{Encoder, Filter, Reporter};
 
 pub const POSTGRES_IDS: [char; 31] = [
@@ -35,18 +24,16 @@ pub const POSTGRES_IDS: [char; 31] = [
 
 
 #[derive(Clone)]
-pub struct PostgresParser<C> {
-    context_type: PhantomData<C>
+pub struct PostgresParser {
 }
-impl<C> PostgresParser<C> {
-    pub fn new() -> PostgresParser<C> {
+impl PostgresParser {
+    pub fn new() -> PostgresParser {
         PostgresParser {
-            context_type: PhantomData
         }
     }
 }
 #[async_trait]
-impl<C> Parser<PostgresqlPacket,C> for PostgresParser<C> where C : WithAuthenticationContext {
+impl<C> Parser<PostgresqlPacket,C> for PostgresParser where C : WithAuthenticationContext + Sync + Send {
     async fn parse(&self, packet: &Packet, context: &C) -> Result<PostgresqlPacket> {
         let packet_type = packet.bytes[0] as char;
         let info;
@@ -70,7 +57,7 @@ impl<C> Parser<PostgresqlPacket,C> for PostgresParser<C> where C : WithAuthentic
             {
                 let msg = StartupMessage::new(&packet.bytes);
                 if let Some(username) = msg.get_parameter("user") {
-                    let mut auth_guard = context.authinfo.write().await;
+                    let mut auth_guard = context.authinfo().write().await;
                     (*auth_guard).username = Some(username);
                 }
                 info = PostgresqlPacketInfo::Startup(msg);
@@ -136,9 +123,10 @@ pub struct PostgresqlProcessor<
     X: Transformer<PostgresqlPacket> + Clone,
     E: Encoder<PostgresqlPacket> + Clone,
     R: Reporter<PostgresqlPacket, C> + Clone,
-    C: SessionContext + WithAuthenticationContext + Clone
+    C: WithAuthenticationContext + Sync + Send,
+    CC: Fn() -> C,
 > {
-    rules: PrewRuleSet<PostgresqlPacket,PostgresParser<C>,F,X,E,R,C>
+    rules: PrewRuleSet<PostgresqlPacket,PostgresParser,F,X,E,R,C,CC>
 }
 
 
@@ -447,31 +435,34 @@ impl Encodable for PostgresqlPacket {
 
 
 
-impl<F,X,E,R,C> PostgresqlProcessor<F,X,E,R,C> where
+impl<F,X,E,R,C,CC> PostgresqlProcessor<F,X,E,R,C,CC> where
         F : Filter<PostgresqlPacket> + Clone,
         X : Transformer<PostgresqlPacket> + Clone,
         E : Encoder<PostgresqlPacket> + Clone,
         R : Reporter<PostgresqlPacket, C> + Clone,
-        C : SessionContext + WithAuthenticationContext + Clone,
+        C : WithAuthenticationContext + Sync + Send,
+        CC : Fn() -> C,
 {
-    pub fn new(rules: PrewRuleSet<PostgresqlPacket, PostgresParser<C>, F, X, E, R, C>) -> PostgresqlProcessor<F, X, E, R, C> {
+    pub fn new(rules: PrewRuleSet<PostgresqlPacket, PostgresParser, F, X, E, R, C, CC>) -> PostgresqlProcessor<F, X, E, R, C, CC> {
         PostgresqlProcessor { rules }
     }
 }
 
-impl PostgresqlProcessor<
+impl<CC> PostgresqlProcessor<
         NoFilter<PostgresqlPacket>,
         NoTransform<PostgresqlPacket>,
         MessageEncoder<PostgresqlPacket>,
         NoReport<PostgresqlPacket>,
-        DefaultContext
-> {
+        DefaultContext,
+        CC
+> where CC : Fn() -> DefaultContext {
     pub fn passthru() -> PostgresqlProcessor<
         NoFilter<PostgresqlPacket>,
         NoTransform<PostgresqlPacket>,
         MessageEncoder<PostgresqlPacket>,
         NoReport<PostgresqlPacket>,
         DefaultContext,
+        impl Fn() -> DefaultContext,
     > {
         let transformer = NoTransform::new();
         let parser = PostgresParser::new();
@@ -485,24 +476,27 @@ impl PostgresqlProcessor<
                 &transformer,
                 &encoder,
                 &reporter,
+                DefaultContext::new,
             )
         )
     }
 }
 
-impl PostgresqlProcessor<
+impl<CC> PostgresqlProcessor<
     NoFilter<PostgresqlPacket>,
     AppendDbNameTransformer,
     MessageEncoder<PostgresqlPacket>,
     NoReport<PostgresqlPacket>,
     DefaultContext,
-> {
+    CC,
+> where CC: Fn() -> DefaultContext {
     pub fn appenddbname<S: Into<String>>(append: S) -> PostgresqlProcessor<
         NoFilter<PostgresqlPacket>,
         AppendDbNameTransformer,
         MessageEncoder<PostgresqlPacket>,
         NoReport<PostgresqlPacket>,
         DefaultContext,
+        impl Fn() -> DefaultContext,
     > {
         let appender = AppendDbNameTransformer { append: append.into() };
         let parser = PostgresParser::new();
@@ -516,7 +510,8 @@ impl PostgresqlProcessor<
                 &filter,
                 &appender,
                 &encoder,
-                &reporter
+                &reporter,
+                DefaultContext::new,
             )
         )
     }

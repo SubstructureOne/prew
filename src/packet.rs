@@ -1,6 +1,8 @@
 use std::fmt::Debug;
+use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
+use futures::lock::Mutex;
 use postgres_types::ToSql;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -14,16 +16,17 @@ impl Packet {
     }
 }
 
-pub trait SessionContext: Debug {
-    // fn new() -> Box<dyn SessionContext>;
+pub trait PacketProcessor {
+    fn start_session(&self) -> Arc<Mutex<dyn PacketProcessingSession + Send>>;
 }
 
+pub trait OtherTrait {}
+
 #[async_trait]
-pub trait PacketProcessor {
-    fn start_session(&self) -> Box<dyn SessionContext>;
+pub trait PacketProcessingSession {
     fn parse(&self, packet_buf: &mut Vec<u8>) -> Result<Option<Packet>>;
-    async fn process_incoming(&self, packet: &Packet, context: &dyn SessionContext) -> Result<Option<Packet>>;
-    async fn process_outgoing(&self, packet: &Packet, context: &Box<dyn SessionContext>) -> Result<Option<Packet>>;
+    async fn process_incoming(&self, packet: &Packet) -> Result<Option<Packet>>;
+    async fn process_outgoing(&self, packet: &Packet) -> Result<Option<Packet>>;
 }
 
 
