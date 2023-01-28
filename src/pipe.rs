@@ -73,7 +73,7 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
 
     async fn process_read_buf(
         &self,
-        session: &Arc<Mutex<dyn PacketProcessingSession>>,
+        session: &Arc<Mutex<dyn PacketProcessingSession + Send>>,
         n: usize,
         read_buf: &[u8],
         mut packet_buf: &mut Vec<u8>,
@@ -98,12 +98,12 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
             let transformed_packet: Option<Packet>;
             {
                 // Scope for self.packet_handler Mutex
-                let h = session.lock().await;
+                let mut h = session.lock().await;
                 if let Ok(Some(packet)) = h.parse(&mut packet_buf) {
                     self.trace("Processing packet".to_string());
                     transformed_packet = match self.direction {
-                        Direction::Forward => h.process_incoming(&packet).await?,
-                        Direction::Backward => h.process_outgoing(&packet).await?,
+                        Direction::Forward => h.process_incoming(&packet)?,
+                        Direction::Backward => h.process_outgoing(&packet)?,
                     };
                     self.trace(format!("Transformed packet: {:?}", transformed_packet));
                 } else {

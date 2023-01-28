@@ -10,7 +10,7 @@ use crate::packet::{Direction, Packet, PacketProcessingSession, PacketProcessor}
 use crate::read_postgresql_packet;
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AuthenticationContext {
     pub username: Option<String>,
     pub authenticated: bool,
@@ -22,29 +22,29 @@ impl AuthenticationContext {
 }
 
 pub trait WithAuthenticationContext {
-    fn authinfo(&self) -> &RwLock<AuthenticationContext>;
+    fn authinfo(&mut self) -> &mut AuthenticationContext;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DefaultContext {
-    pub authinfo: RwLock<AuthenticationContext>,
+    pub authinfo: AuthenticationContext,
 }
 impl WithAuthenticationContext for DefaultContext {
-    fn authinfo(&self) -> &RwLock<AuthenticationContext> {
-        &self.authinfo
+    fn authinfo(&mut self) -> &mut AuthenticationContext {
+        &mut self.authinfo
     }
 }
 impl DefaultContext {
     pub fn new() -> Self {
         DefaultContext {
-            authinfo: RwLock::new(AuthenticationContext::new()),
+            authinfo: AuthenticationContext::new(),
         }
     }
 }
 
-#[async_trait]
+// #[async_trait]
 pub trait Parser<T, C> {
-    async fn parse(&self, packet: &Packet, context: &C) -> Result<T>;
+    fn parse(&self, packet: &Packet, context: &mut C) -> Result<T>;
 }
 
 pub trait Filter<T> {
@@ -59,9 +59,9 @@ pub trait Encoder<T> {
     fn encode(&self, message: &T) -> Result<Packet>;
 }
 
-#[async_trait]
+// #[async_trait]
 pub trait Reporter<T, C> {
-    async fn report(&self, message: &T, direction: Direction, context: &C) -> Result<()>;
+    fn report(&self, message: &T, direction: Direction, context: &C) -> Result<()>;
 }
 
 #[derive(Clone)]
@@ -87,13 +87,13 @@ pub struct PrewRuleSet<
 }
 
 impl<T,P,F,X,E,R,C,CC> PacketProcessor for PrewRuleSet<T,P,F,X,E,R,C,CC> where
-    T : Clone,
-    P : Parser<T,C> + Clone,
-    F : Filter<T> + Clone,
-    X : Transformer<T> + Clone,
-    E : Encoder<T> + Clone,
-    R : Reporter<T, C> + Clone,
-    C : Clone,
+    T : Clone + Send + Sync + 'static,
+    P : Parser<T,C> + Clone + Send + Sync + 'static,
+    F : Filter<T> + Clone + Send + Sync + 'static,
+    X : Transformer<T> + Clone + Send + Sync + 'static,
+    E : Encoder<T> + Clone + Send + Sync + 'static,
+    R : Reporter<T, C> + Clone + Send + Sync + 'static,
+    C : Clone + Send + Sync + 'static,
     CC : Fn() -> C,
 {
     fn start_session(&self) -> Arc<Mutex<dyn PacketProcessingSession + Send>> {
@@ -233,37 +233,37 @@ impl<T,P,F,X,E,R,C> PrewRuleSession<T,P,F,X,E,R,C> where
 
 #[async_trait]
 impl<T,P,F,X,E,R,C> PacketProcessingSession for PrewRuleSession<T, P, F, X, E, R, C> where
-    T : Clone + Send,
-    P : Parser<T,C> + Clone + Send,
-    F : Filter<T> + Clone + Send,
-    X : Transformer<T> + Clone + Send,
-    E : Encoder<T> + Clone + Send,
-    R : Reporter<T, C> + Clone + Send,
-    C : Clone + Send,
+    T : Clone + Send + Sync,
+    P : Parser<T,C> + Clone + Send + Sync,
+    F : Filter<T> + Clone + Send + Sync,
+    X : Transformer<T> + Clone + Send + Sync,
+    E : Encoder<T> + Clone + Send + Sync,
+    R : Reporter<T, C> + Clone + Send + Sync,
+    C : Clone + Send + Sync,
 {
     fn parse(&self, packet_buf: &mut Vec<u8>) -> Result<Option<Packet>> {
         // FIXME: assuming Postgres type packets
         read_postgresql_packet(packet_buf)
     }
 
-    async fn process_incoming(&self, packet: &Packet) -> Result<Option<Packet>> {
-        let parsed = self.parser.parse(packet, &self.context).await?;
-        // self.reporter.report(&parsed, Direction::Forward, &self.context).await?;
-        // if self.filter.filter(&parsed) {
-        //     let transformed = self.transformer.transform(&parsed)?;
-        //     let encoded = self.encoder.encode(&transformed)?;
-        //     Ok(Some(encoded))
-        // } else {
+    fn process_incoming(&mut self, packet: &Packet) -> Result<Option<Packet>> {
+        let parsed = self.parser.parse(packet, &mut self.context)?;
+        self.reporter.report(&parsed, Direction::Forward, &self.context)?;
+        if self.filter.filter(&parsed) {
+            let transformed = self.transformer.transform(&parsed)?;
+            let encoded = self.encoder.encode(&transformed)?;
+            Ok(Some(encoded))
+        } else {
             Ok(None)
-        // }
+        }
     }
 
-    async fn process_outgoing(&self, packet: &Packet) -> Result<Option<Packet>> {
+    fn process_outgoing(&mut self, packet: &Packet) -> Result<Option<Packet>> {
         self.reporter.report(
-            &self.parser.parse(packet, &self.context).await?,
+            &self.parser.parse(packet, &mut self.context)?,
             Direction::Backward,
             &self.context
-        ).await?;
+        )?;
         Ok(Some(packet.clone()))
     }
 }
@@ -313,7 +313,7 @@ impl NoParserEncoder {
 }
 #[async_trait]
 impl Parser<Packet,NoContext> for NoParserEncoder {
-    async fn parse(&self, packet: &Packet, _context: &NoContext) -> Result<Packet> {
+    fn parse(&self, packet: &Packet, _context: &mut NoContext) -> Result<Packet> {
         Ok(packet.clone())
     }
 }
@@ -359,7 +359,7 @@ pub struct NoReport<T: Sync> {
 }
 #[async_trait]
 impl<T: Sync, C> Reporter<T, C> for NoReport<T> {
-    async fn report(&self, _message: &T, _direction: Direction, _context: &C) -> Result<()> {
+    fn report(&self, _message: &T, _direction: Direction, _context: &C) -> Result<()> {
         Ok(())
     }
 }

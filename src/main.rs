@@ -5,10 +5,12 @@ use std::sync::Arc;
 
 use serde::{Serialize, Deserialize};
 use anyhow::{anyhow, Result};
+use futures::lock::Mutex;
 use log::{warn, info};
 
-use prew::{RewriteReverseProxy, PacketRules, PostgresqlReporter, PrewRuleSet, NoFilter, MessageEncoder};
+use prew::{RewriteReverseProxy, PacketRules, PrewRuleSet, NoFilter, MessageEncoder};
 use prew::{PostgresParser, AppendDbNameTransformer, NoReport, NoTransform, PacketProcessor};
+use prew::rule::{DefaultContext};
 // use prew::{Parser, Filter, Transformer, Encoder, Reporter};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -89,7 +91,7 @@ async fn main() -> Result<()>{
     // let processor = PostgresqlProcessor::passthru();
     let mut proxy = RewriteReverseProxy::new();
 
-    let processor: Arc<dyn PacketProcessor + Send + Sync>;
+    let processor: Arc<Mutex<dyn PacketProcessor + Send>>;
     if let ProxyMode::DbAppend(appendinfo) = config.mode {
         let rules = PrewRuleSet::new(
             &PostgresParser::new(),
@@ -97,13 +99,14 @@ async fn main() -> Result<()>{
             &AppendDbNameTransformer::new(appendinfo.append),
             &MessageEncoder::new(),
             &NoReport::new(),
+            &DefaultContext::new
         );
-        if let Ok(reporter_connstr) = env::var("PREW_REPORTER_CONNSTR") {
-            let reporter = PostgresqlReporter::new(reporter_connstr);
-            processor = Arc::new(rules.with_reporter(&reporter));
-        } else {
-            processor = Arc::new(rules);
-        }
+        // if let Ok(reporter_connstr) = env::var("PREW_REPORTER_CONNSTR") {
+        //     let reporter = PostgresqlReporter::new(reporter_connstr);
+        //     processor = Arc::new(rules.with_reporter(&reporter));
+        // } else {
+            processor = Arc::new(Mutex::new(rules));
+        // }
     } else if let ProxyMode::Passthru = config.mode {
         let rules = PrewRuleSet::new(
             &PostgresParser::new(),
@@ -111,13 +114,14 @@ async fn main() -> Result<()>{
             &NoTransform::new(),
             &MessageEncoder::new(),
             &NoReport::new(),
+            &DefaultContext::new
         );
-        if let Ok(reporter_connstr) = env::var("PREW_REPORTER_CONNSTR") {
-            let reporter = PostgresqlReporter::new(reporter_connstr);
-            processor = Arc::new(rules.with_reporter(&reporter));
-        } else {
-            processor = Arc::new(rules);
-        }
+        // if let Ok(reporter_connstr) = env::var("PREW_REPORTER_CONNSTR") {
+        //     let reporter = PostgresqlReporter::new(reporter_connstr);
+        //     processor = Arc::new(rules.with_reporter(&reporter));
+        // } else {
+        processor = Arc::new(Mutex::new(rules));
+        // }
     } else {
         return Err(anyhow!("Unknown config mode: {:?}", config.mode));
     }

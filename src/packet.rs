@@ -22,11 +22,11 @@ pub trait PacketProcessor {
 
 pub trait OtherTrait {}
 
-#[async_trait]
+// #[async_trait]
 pub trait PacketProcessingSession {
     fn parse(&self, packet_buf: &mut Vec<u8>) -> Result<Option<Packet>>;
-    async fn process_incoming(&self, packet: &Packet) -> Result<Option<Packet>>;
-    async fn process_outgoing(&self, packet: &Packet) -> Result<Option<Packet>>;
+    fn process_incoming(&mut self, packet: &Packet) -> Result<Option<Packet>>;
+    fn process_outgoing(&mut self, packet: &Packet) -> Result<Option<Packet>>;
 }
 
 

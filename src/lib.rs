@@ -10,6 +10,7 @@ use futures::{
     select,
 };
 use futures::future::select_all;
+use futures::lock::Mutex;
 use log::{debug, info, trace};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -25,7 +26,7 @@ pub use crate::packet::{PacketProcessor};
 pub struct PacketRules {
     pub bind_addr: String,
     pub server_addr: String,
-    pub processor: Arc<dyn PacketProcessor + Send + Sync>,
+    pub processor: Arc<Mutex<dyn PacketProcessor + Send>>,
 }
 
 
@@ -33,7 +34,7 @@ pub struct PacketRules {
 pub struct ProtocolProxy {
     server_addr: String,
     listener: TcpListener,
-    processor: Arc<dyn PacketProcessor + Send + Sync>,
+    processor: Arc<Mutex<dyn PacketProcessor + Send>>,
 }
 
 
@@ -63,7 +64,7 @@ impl RewriteReverseProxy {
     async fn create_pipes(
         db_addr: String,
         mut client_socket: TcpStream,
-        handler_ref: Arc<dyn PacketProcessor + Send + Sync>,
+        handler_ref: Arc<Mutex<dyn PacketProcessor + Send>>,
         // connstr: String,
         // kill_switch_receiver: oneshot::Receiver<()>,
     ) {

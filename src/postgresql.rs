@@ -34,7 +34,7 @@ impl PostgresParser {
 }
 #[async_trait]
 impl<C> Parser<PostgresqlPacket,C> for PostgresParser where C : WithAuthenticationContext + Sync + Send {
-    async fn parse(&self, packet: &Packet, context: &C) -> Result<PostgresqlPacket> {
+    fn parse(&self, packet: &Packet, context: &mut C) -> Result<PostgresqlPacket> {
         let packet_type = packet.bytes[0] as char;
         let info;
         if POSTGRES_IDS.contains(&packet_type) {
@@ -43,7 +43,7 @@ impl<C> Parser<PostgresqlPacket,C> for PostgresParser where C : WithAuthenticati
             } else if packet_type == 'R' {
                 if packet.bytes.len() == 8 && BigEndian::read_u32(&packet.bytes[5..9]) == 0 {
                     info = PostgresqlPacketInfo::Authentication(AuthenticationMessage::AuthenticationOk);
-                    let mut auth_guard = context.authinfo().write().await;
+                    let mut auth_guard = context.authinfo();
                     (*auth_guard).authenticated = true;
                 } else {
                     info = PostgresqlPacketInfo::Authentication(AuthenticationMessage::Other);
@@ -57,7 +57,7 @@ impl<C> Parser<PostgresqlPacket,C> for PostgresParser where C : WithAuthenticati
             {
                 let msg = StartupMessage::new(&packet.bytes);
                 if let Some(username) = msg.get_parameter("user") {
-                    let mut auth_guard = context.authinfo().write().await;
+                    let mut auth_guard = context.authinfo();
                     (*auth_guard).username = Some(username);
                 }
                 info = PostgresqlPacketInfo::Startup(msg);
@@ -476,7 +476,7 @@ impl<CC> PostgresqlProcessor<
                 &transformer,
                 &encoder,
                 &reporter,
-                DefaultContext::new,
+                &DefaultContext::new,
             )
         )
     }
@@ -511,7 +511,7 @@ impl<CC> PostgresqlProcessor<
                 &appender,
                 &encoder,
                 &reporter,
-                DefaultContext::new,
+                &DefaultContext::new,
             )
         )
     }
