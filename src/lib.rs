@@ -3,6 +3,7 @@ pub mod packet;
 pub mod postgresql;
 pub mod rule;
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use futures::{
@@ -21,7 +22,6 @@ pub use crate::postgresql::{PostgresParser, AppendDbNameTransformer};
 pub use crate::rule::{PrewRuleSet, NoFilter, NoReport, MessageEncoder, NoTransform};
 pub use crate::rule::{Parser, Filter, Transformer, Encoder, Reporter};
 pub use crate::packet::{PacketProcessor};
-use crate::rule::Context;
 
 pub struct PacketRules {
     pub bind_addr: String,
@@ -43,7 +43,7 @@ pub struct RewriteReverseProxy {
 }
 
 
-impl RewriteReverseProxy where {
+impl RewriteReverseProxy {
     pub fn new() -> RewriteReverseProxy {
         RewriteReverseProxy {
             proxies: vec![]
@@ -92,7 +92,7 @@ impl RewriteReverseProxy where {
                     println!("Connection error: {}", e);
                 }
             });
-            let context = Context::new(client);
+            let context = handler_ref.start_session();
             let mut forward_pipe = Pipe::new(
                 client_addr.clone(),
                 handler_ref.clone(),

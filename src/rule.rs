@@ -1,12 +1,10 @@
 use std::marker::PhantomData;
-use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
-use tokio_postgres::Client;
 
-use crate::packet::{Direction, Packet, PacketProcessor};
+use crate::packet::{Direction, Packet, PacketProcessor, SessionContext};
 use crate::read_postgresql_packet;
 
 
@@ -21,24 +19,32 @@ impl AuthenticationContext {
     }
 }
 
-// FIXME: make Context generic
-#[derive(Debug)]
-pub struct Context {
-    pub authinfo: RwLock<AuthenticationContext>,
-    pub client: Arc<Client>,
+pub trait WithAuthenticationContext {
+    fn authinfo(&self) -> &RwLock<AuthenticationContext>;
 }
-impl Context {
-    pub fn new(client: Client) -> Context {
-        Context {
+
+#[derive(Debug, Clone)]
+pub struct DefaultContext {
+    pub authinfo: RwLock<AuthenticationContext>,
+    // pub client: Arc<Client>,
+}
+impl WithAuthenticationContext for DefaultContext {
+    fn authinfo(&self) -> &RwLock<AuthenticationContext> {
+        &self.authinfo
+    }
+}
+impl SessionContext for DefaultContext {
+    fn new() -> Self {
+        DefaultContext {
             authinfo: RwLock::new(AuthenticationContext::new()),
-            client: Arc::new(client),
+            // client: Arc::new(client),
         }
     }
 }
 
 #[async_trait]
-pub trait Parser<T> {
-    async fn parse(&self, packet: &Packet, context: &Context) -> Result<T>;
+pub trait Parser<T, C> {
+    async fn parse(&self, packet: &Packet, context: &C) -> Result<T>;
 }
 
 pub trait Filter<T> {
@@ -54,25 +60,27 @@ pub trait Encoder<T> {
 }
 
 #[async_trait]
-pub trait Reporter<T> {
-    async fn report(&self, message: &T, direction: Direction, context: &Context) -> Result<()>;
+pub trait Reporter<T, C> {
+    async fn report(&self, message: &T, direction: Direction, context: &C) -> Result<()>;
 }
 
 #[derive(Clone)]
 pub struct PrewRuleSet<
         T,
-        P : Parser<T> + Clone,
+        P : Parser<T,C> + Clone,
         F : Filter<T> + Clone,
         X : Transformer<T> + Clone,
         E : Encoder<T> + Clone,
-        R : Reporter<T> + Clone,
+        R : Reporter<T, C> + Clone,
+        C : SessionContext + Clone,
 > {
     pub parser: Box<P>,
     pub filter: Box<F>,
     pub transformer: Box<X>,
     pub encoder: Box<E>,
     pub reporter: Box<R>,
-    packet_type: PhantomData<T>
+    packet_type: PhantomData<T>,
+    context_type: PhantomData<C>,
     // router: Router<T>
 }
 
@@ -81,13 +89,14 @@ pub trait PacketTransformer {
     fn transform(&self, packet: &Self::PacketType) -> Self::PacketType;
 }
 
-impl<T,P,F,X,E,R> PrewRuleSet<T,P,F,X,E,R> where
+impl<T,P,F,X,E,R,C> PrewRuleSet<T,P,F,X,E,R,C> where
     T : Clone,
-    P : Parser<T> + Clone,
+    P : Parser<T,C> + Clone,
     F : Filter<T> + Clone,
     X : Transformer<T> + Clone,
     E : Encoder<T> + Clone,
-    R : Reporter<T> + Clone,
+    R : Reporter<T, C> + Clone,
+    C : SessionContext + Clone,
 {
     pub fn new(
         parser: &P,
@@ -95,7 +104,7 @@ impl<T,P,F,X,E,R> PrewRuleSet<T,P,F,X,E,R> where
         transformer: &X,
         encoder: &E,
         reporter: &R,
-    ) -> PrewRuleSet<T,P,F,X,E,R> {
+    ) -> PrewRuleSet<T,P,F,X,E,R,C> {
         PrewRuleSet {
             parser: Box::new(parser.clone()),
             filter: Box::new(filter.clone()),
@@ -103,11 +112,12 @@ impl<T,P,F,X,E,R> PrewRuleSet<T,P,F,X,E,R> where
             encoder: Box::new(encoder.clone()),
             reporter: Box::new(reporter.clone()),
             packet_type: PhantomData,
+            context_type: PhantomData,
         }
     }
 
-    pub fn with_reporter<RN>(&self, new_reporter: &RN) -> PrewRuleSet<T, P, F, X, E, RN>
-        where RN : Reporter<T> + Clone
+    pub fn with_reporter<RN>(&self, new_reporter: &RN) -> PrewRuleSet<T, P, F, X, E, RN, C>
+        where RN : Reporter<T, C> + Clone
     {
         PrewRuleSet::new(
             &self.parser.clone(),
@@ -118,7 +128,7 @@ impl<T,P,F,X,E,R> PrewRuleSet<T,P,F,X,E,R> where
         )
     }
 
-    pub fn with_filter<FN>(&self, new_filter: &FN) -> PrewRuleSet<T, P, FN, X, E, R>
+    pub fn with_filter<FN>(&self, new_filter: &FN) -> PrewRuleSet<T, P, FN, X, E, R, C>
         where FN : Filter<T> + Clone
     {
         PrewRuleSet::new(
@@ -130,7 +140,7 @@ impl<T,P,F,X,E,R> PrewRuleSet<T,P,F,X,E,R> where
         )
     }
 
-    pub fn with_transformer<XN>(&self, new_transformer: &XN) -> PrewRuleSet<T, P, F, XN, E, R>
+    pub fn with_transformer<XN>(&self, new_transformer: &XN) -> PrewRuleSet<T, P, F, XN, E, R, C>
         where XN : Transformer<T> + Clone
     {
         PrewRuleSet::new(
@@ -144,20 +154,25 @@ impl<T,P,F,X,E,R> PrewRuleSet<T,P,F,X,E,R> where
 }
 
 #[async_trait]
-impl<T,P,F,X,E,R> PacketProcessor for PrewRuleSet<T, P, F, X, E, R> where
+impl<T,P,F,X,E,R,C> PacketProcessor for PrewRuleSet<T, P, F, X, E, R, C> where
     T : Clone + Sync + Send,
-    P : Parser<T> + Clone + Sync + Send,
+    P : Parser<T,C> + Clone + Sync + Send,
     F : Filter<T> + Clone + Sync + Send,
     X : Transformer<T> + Clone + Sync + Send,
     E : Encoder<T> + Clone + Sync + Send,
-    R : Reporter<T> + Clone + Sync + Send,
+    R : Reporter<T, C> + Clone + Sync + Send,
+    C : SessionContext + Clone + Sync + Send,
 {
+    fn start_session(&self) -> Box<&dyn SessionContext> {
+        Box::new(C::new())
+    }
+
     fn parse(&self, packet_buf: &mut Vec<u8>) -> Result<Option<Packet>> {
         // FIXME: assuming Postgres type packets
         read_postgresql_packet(packet_buf)
     }
 
-    async fn process_incoming(&self, packet: &Packet, context: &Context) -> Result<Option<Packet>> {
+    async fn process_incoming(&self, packet: &Packet, context: &C) -> Result<Option<Packet>> {
         let parsed = self.parser.parse(packet, context).await?;
         self.reporter.report(&parsed, Direction::Forward, context).await?;
         if self.filter.filter(&parsed) {
@@ -169,7 +184,7 @@ impl<T,P,F,X,E,R> PacketProcessor for PrewRuleSet<T, P, F, X, E, R> where
         }
     }
 
-    async fn process_outgoing(&self, packet: &Packet, context: &Context) -> Result<Option<Packet>> {
+    async fn process_outgoing(&self, packet: &Packet, context: &C) -> Result<Option<Packet>> {
         self.reporter.report(
             &self.parser.parse(packet, context).await?,
             Direction::Backward,
@@ -179,9 +194,16 @@ impl<T,P,F,X,E,R> PacketProcessor for PrewRuleSet<T, P, F, X, E, R> where
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct NoContext {}
+impl SessionContext for NoContext {
+    fn new() -> Self {
+        NoContext {}
+    }
+}
 
-impl<T,P,E> PrewRuleSet<T, P, NoFilter<T>, NoTransform<T>, E, NoReport<T>>
-    where T : Clone + Sync, P : Parser<T> + Clone, E : Encoder<T> + Clone
+impl<T,P,E> PrewRuleSet<T, P, NoFilter<T>, NoTransform<T>, E, NoReport<T>, NoContext>
+    where T : Clone + Sync, P : Parser<T,NoContext> + Clone, E : Encoder<T> + Clone
 {
     pub fn minimal(parser: &P, encoder: &E) -> PrewRuleSet<
         T,
@@ -189,7 +211,8 @@ impl<T,P,E> PrewRuleSet<T, P, NoFilter<T>, NoTransform<T>, E, NoReport<T>>
         NoFilter<T>,
         NoTransform<T>,
         E,
-        NoReport<T>
+        NoReport<T>,
+        NoContext,
     > {
         PrewRuleSet::new(
             parser,
@@ -210,8 +233,8 @@ impl NoParserEncoder {
     }
 }
 #[async_trait]
-impl Parser<Packet> for NoParserEncoder {
-    async fn parse(&self, packet: &Packet, _context: &Context) -> Result<Packet> {
+impl Parser<Packet,NoContext> for NoParserEncoder {
+    async fn parse(&self, packet: &Packet, _context: &NoContext) -> Result<Packet> {
         Ok(packet.clone())
     }
 }
@@ -256,8 +279,8 @@ pub struct NoReport<T: Sync> {
     message_type: PhantomData<T>
 }
 #[async_trait]
-impl<T: Sync> Reporter<T> for NoReport<T> {
-    async fn report(&self, _message: &T, _direction: Direction, _context: &Context) -> Result<()> {
+impl<T: Sync, C> Reporter<T, C> for NoReport<T> {
+    async fn report(&self, _message: &T, _direction: Direction, _context: &C) -> Result<()> {
         Ok(())
     }
 }
