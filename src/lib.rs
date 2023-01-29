@@ -119,7 +119,6 @@ impl RewriteReverseProxy {
 
     pub async fn run(
         &mut self,
-        reporter_connstr: String,
         // kill_switch_receiver: oneshot::Receiver<()>,
     ) {
         trace!("RewriteReverseProxy.run - enter");

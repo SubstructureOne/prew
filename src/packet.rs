@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 use anyhow::Result;
-use async_trait::async_trait;
 use futures::lock::Mutex;
 use postgres_types::ToSql;
 
