@@ -32,7 +32,7 @@ pub trait PacketProcessingSession {
 #[derive(Debug, ToSql)]
 #[postgres(name="pktdirection")]
 pub enum Direction {
-    Forward,  // corresponds to handle_request
-    Backward, // corresponds to handle_response
+    Forward,  // corresponds to process_incoming
+    Backward, // corresponds to process_outgoing
 }
 

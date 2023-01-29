@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use futures::lock::Mutex;
 use log::{warn, info};
 
-use prew::{RewriteReverseProxy, PacketRules, PrewRuleSet, NoFilter, MessageEncoder};
+use prew::{RewriteReverseProxy, PacketRules, RuleSetProcessor, NoFilter, MessageEncoder};
 use prew::{PostgresParser, AppendDbNameTransformer, NoReport, NoTransform, PacketProcessor};
 use prew::rule::{DefaultContext};
 // use prew::{Parser, Filter, Transformer, Encoder, Reporter};
@@ -93,7 +93,7 @@ async fn main() -> Result<()>{
 
     let processor: Arc<Mutex<dyn PacketProcessor + Send>>;
     if let ProxyMode::DbAppend(appendinfo) = config.mode {
-        let rules = PrewRuleSet::new(
+        let rules = RuleSetProcessor::new(
             &PostgresParser::new(),
             &NoFilter::new(),
             &AppendDbNameTransformer::new(appendinfo.append),
@@ -101,14 +101,9 @@ async fn main() -> Result<()>{
             &NoReport::new(),
             &DefaultContext::new
         );
-        // if let Ok(reporter_connstr) = env::var("PREW_REPORTER_CONNSTR") {
-        //     let reporter = PostgresqlReporter::new(reporter_connstr);
-        //     processor = Arc::new(rules.with_reporter(&reporter));
-        // } else {
-            processor = Arc::new(Mutex::new(rules));
-        // }
+        processor = Arc::new(Mutex::new(rules));
     } else if let ProxyMode::Passthru = config.mode {
-        let rules = PrewRuleSet::new(
+        let rules = RuleSetProcessor::new(
             &PostgresParser::new(),
             &NoFilter::new(),
             &NoTransform::new(),
@@ -116,12 +111,7 @@ async fn main() -> Result<()>{
             &NoReport::new(),
             &DefaultContext::new
         );
-        // if let Ok(reporter_connstr) = env::var("PREW_REPORTER_CONNSTR") {
-        //     let reporter = PostgresqlReporter::new(reporter_connstr);
-        //     processor = Arc::new(rules.with_reporter(&reporter));
-        // } else {
         processor = Arc::new(Mutex::new(rules));
-        // }
     } else {
         return Err(anyhow!("Unknown config mode: {:?}", config.mode));
     }
@@ -133,7 +123,6 @@ async fn main() -> Result<()>{
     };
     proxy.add_proxy(Box::new(rules)).await;
     info!("Starting proxy");
-    let reporter_connstr = env::var("PREW_REPORTER_CONNSTR").unwrap();
-    proxy.run(reporter_connstr).await;
+    proxy.run().await;
     Ok(())
 }

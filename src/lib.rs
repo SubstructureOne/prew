@@ -17,9 +17,9 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::pipe::Pipe;
 use packet::{Direction};
 
-pub use crate::postgresql::{PostgresqlPacket, PostgresqlProcessor, read_postgresql_packet};
+pub use crate::postgresql::{PostgresqlPacket, read_postgresql_packet};
 pub use crate::postgresql::{PostgresParser, AppendDbNameTransformer};
-pub use crate::rule::{PrewRuleSet, NoFilter, NoReport, MessageEncoder, NoTransform};
+pub use crate::rule::{RuleSetProcessor, NoFilter, NoReport, MessageEncoder, NoTransform};
 pub use crate::rule::{Parser, Filter, Transformer, Encoder, Reporter};
 pub use crate::packet::{PacketProcessor};
 

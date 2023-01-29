@@ -64,7 +64,7 @@ pub trait Reporter<T, C> {
 }
 
 #[derive(Clone)]
-pub struct PrewRuleSet<
+pub struct RuleSetProcessor<
         T,
         P : Parser<T,C> + Clone,
         F : Filter<T> + Clone,
@@ -85,7 +85,7 @@ pub struct PrewRuleSet<
     // router: Router<T>
 }
 
-impl<T,P,F,X,E,R,C,CC> PacketProcessor for PrewRuleSet<T,P,F,X,E,R,C,CC> where
+impl<T,P,F,X,E,R,C,CC> PacketProcessor for RuleSetProcessor<T,P,F,X,E,R,C,CC> where
     T : Clone + Send + Sync + 'static,
     P : Parser<T,C> + Clone + Send + Sync + 'static,
     F : Filter<T> + Clone + Send + Sync + 'static,
@@ -97,7 +97,7 @@ impl<T,P,F,X,E,R,C,CC> PacketProcessor for PrewRuleSet<T,P,F,X,E,R,C,CC> where
 {
     fn start_session(&self) -> Arc<Mutex<dyn PacketProcessingSession + Send>> {
         let context = (self.create_context)();
-        let session = PrewRuleSession::new(
+        let session = RuleSetSession::new(
             self.parser.as_ref(),
             self.filter.as_ref(),
             self.transformer.as_ref(),
@@ -109,7 +109,7 @@ impl<T,P,F,X,E,R,C,CC> PacketProcessor for PrewRuleSet<T,P,F,X,E,R,C,CC> where
     }
 }
 
-pub struct PrewRuleSession<
+pub struct RuleSetSession<
     T,
     P : Parser<T,C> + Clone,
     F : Filter<T> + Clone,
@@ -132,7 +132,7 @@ pub trait PacketTransformer {
     fn transform(&self, packet: &Self::PacketType) -> Self::PacketType;
 }
 
-impl<T,P,F,X,E,R,C,CC> PrewRuleSet<T,P,F,X,E,R,C,CC> where
+impl<T,P,F,X,E,R,C,CC> RuleSetProcessor<T,P,F,X,E,R,C,CC> where
     T : Clone,
     P : Parser<T,C> + Clone,
     F : Filter<T> + Clone,
@@ -148,8 +148,8 @@ impl<T,P,F,X,E,R,C,CC> PrewRuleSet<T,P,F,X,E,R,C,CC> where
         encoder: &E,
         reporter: &R,
         create_context: &CC,
-    ) -> PrewRuleSet<T,P,F,X,E,R,C,CC> {
-        PrewRuleSet {
+    ) -> RuleSetProcessor<T,P,F,X,E,R,C,CC> {
+        RuleSetProcessor {
             parser: Box::new(parser.clone()),
             filter: Box::new(filter.clone()),
             transformer: Box::new(transformer.clone()),
@@ -160,10 +160,10 @@ impl<T,P,F,X,E,R,C,CC> PrewRuleSet<T,P,F,X,E,R,C,CC> where
         }
     }
 
-    pub fn with_reporter<RN>(&self, new_reporter: &RN) -> PrewRuleSet<T, P, F, X, E, RN, C, CC>
+    pub fn with_reporter<RN>(&self, new_reporter: &RN) -> RuleSetProcessor<T, P, F, X, E, RN, C, CC>
         where RN : Reporter<T, C> + Clone
     {
-        PrewRuleSet::new(
+        RuleSetProcessor::new(
             &self.parser.clone(),
             &self.filter.clone(),
             &self.transformer.clone(),
@@ -173,10 +173,10 @@ impl<T,P,F,X,E,R,C,CC> PrewRuleSet<T,P,F,X,E,R,C,CC> where
         )
     }
 
-    pub fn with_filter<FN>(&self, new_filter: &FN) -> PrewRuleSet<T, P, FN, X, E, R, C, CC>
+    pub fn with_filter<FN>(&self, new_filter: &FN) -> RuleSetProcessor<T, P, FN, X, E, R, C, CC>
         where FN : Filter<T> + Clone
     {
-        PrewRuleSet::new(
+        RuleSetProcessor::new(
             &self.parser.clone(),
             new_filter,
             &self.transformer.clone(),
@@ -186,10 +186,10 @@ impl<T,P,F,X,E,R,C,CC> PrewRuleSet<T,P,F,X,E,R,C,CC> where
         )
     }
 
-    pub fn with_transformer<XN>(&self, new_transformer: &XN) -> PrewRuleSet<T, P, F, XN, E, R, C, CC>
+    pub fn with_transformer<XN>(&self, new_transformer: &XN) -> RuleSetProcessor<T, P, F, XN, E, R, C, CC>
         where XN : Transformer<T> + Clone
     {
-        PrewRuleSet::new(
+        RuleSetProcessor::new(
             &self.parser,
             &self.filter,
             new_transformer,
@@ -200,7 +200,7 @@ impl<T,P,F,X,E,R,C,CC> PrewRuleSet<T,P,F,X,E,R,C,CC> where
     }
 }
 
-impl<T,P,F,X,E,R,C> PrewRuleSession<T,P,F,X,E,R,C> where
+impl<T,P,F,X,E,R,C> RuleSetSession<T,P,F,X,E,R,C> where
     T : Clone,
     P : Parser<T,C> + Clone,
     F : Filter<T> + Clone,
@@ -216,8 +216,8 @@ impl<T,P,F,X,E,R,C> PrewRuleSession<T,P,F,X,E,R,C> where
         encoder: &E,
         reporter: &R,
         context: &C,
-    ) -> PrewRuleSession<T,P,F,X,E,R,C> {
-        PrewRuleSession {
+    ) -> RuleSetSession<T,P,F,X,E,R,C> {
+        RuleSetSession {
             parser: Box::new(parser.clone()),
             filter: Box::new(filter.clone()),
             transformer: Box::new(transformer.clone()),
@@ -231,7 +231,7 @@ impl<T,P,F,X,E,R,C> PrewRuleSession<T,P,F,X,E,R,C> where
 
 
 #[async_trait]
-impl<T,P,F,X,E,R,C> PacketProcessingSession for PrewRuleSession<T, P, F, X, E, R, C> where
+impl<T,P,F,X,E,R,C> PacketProcessingSession for RuleSetSession<T, P, F, X, E, R, C> where
     T : Clone + Send + Sync,
     P : Parser<T,C> + Clone + Send + Sync,
     F : Filter<T> + Clone + Send + Sync,
@@ -275,13 +275,13 @@ impl NoContext {
     }
 }
 
-impl<T,P,E,CC> PrewRuleSet<T, P, NoFilter<T>, NoTransform<T>, E, NoReport<T>, NoContext, CC> where
+impl<T,P,E,CC> RuleSetProcessor<T, P, NoFilter<T>, NoTransform<T>, E, NoReport<T>, NoContext, CC> where
     T : Clone + Sync,
     P : Parser<T,NoContext> + Clone,
     E : Encoder<T> + Clone,
     CC : Fn() -> NoContext,
 {
-    pub fn minimal(parser: &P, encoder: &E) -> PrewRuleSet<
+    pub fn minimal(parser: &P, encoder: &E) -> RuleSetProcessor<
         T,
         P,
         NoFilter<T>,
@@ -291,7 +291,7 @@ impl<T,P,E,CC> PrewRuleSet<T, P, NoFilter<T>, NoTransform<T>, E, NoReport<T>, No
         NoContext,
         impl Fn() -> NoContext,
     > {
-        PrewRuleSet::new(
+        RuleSetProcessor::new(
             parser,
             &NoFilter::new(),
             &NoTransform::new(),
