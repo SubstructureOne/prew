@@ -50,8 +50,8 @@ pub trait Filter<T> {
     fn filter(&self, message: &T) -> bool;
 }
 
-pub trait Transformer<T> {
-    fn transform(&self, message: &T) -> Result<T>;
+pub trait Transformer<T, C> {
+    fn transform(&self, message: &T, context: &C) -> Result<T>;
 }
 
 pub trait Encoder<T> {
@@ -66,9 +66,9 @@ pub trait Reporter<T, C> {
 #[derive(Clone)]
 pub struct RuleSetProcessor<
         T,
-        P : Parser<T,C> + Clone,
+        P : Parser<T, C> + Clone,
         F : Filter<T> + Clone,
-        X : Transformer<T> + Clone,
+        X : Transformer<T, C> + Clone,
         E : Encoder<T> + Clone,
         R : Reporter<T, C> + Clone,
         C,
@@ -89,7 +89,7 @@ impl<T,P,F,X,E,R,C,CC> PacketProcessor for RuleSetProcessor<T,P,F,X,E,R,C,CC> wh
     T : Clone + Send + Sync + 'static,
     P : Parser<T,C> + Clone + Send + Sync + 'static,
     F : Filter<T> + Clone + Send + Sync + 'static,
-    X : Transformer<T> + Clone + Send + Sync + 'static,
+    X : Transformer<T, C> + Clone + Send + Sync + 'static,
     E : Encoder<T> + Clone + Send + Sync + 'static,
     R : Reporter<T, C> + Clone + Send + Sync + 'static,
     C : Clone + Send + Sync + 'static,
@@ -113,7 +113,7 @@ pub struct RuleSetSession<
     T,
     P : Parser<T,C> + Clone,
     F : Filter<T> + Clone,
-    X : Transformer<T> + Clone,
+    X : Transformer<T, C> + Clone,
     E : Encoder<T> + Clone,
     R : Reporter<T, C> + Clone,
     C : Clone,
@@ -136,7 +136,7 @@ impl<T,P,F,X,E,R,C,CC> RuleSetProcessor<T,P,F,X,E,R,C,CC> where
     T : Clone,
     P : Parser<T,C> + Clone,
     F : Filter<T> + Clone,
-    X : Transformer<T> + Clone,
+    X : Transformer<T, C> + Clone,
     E : Encoder<T> + Clone,
     R : Reporter<T, C> + Clone,
     CC : Fn() -> C + Clone,
@@ -187,7 +187,7 @@ impl<T,P,F,X,E,R,C,CC> RuleSetProcessor<T,P,F,X,E,R,C,CC> where
     }
 
     pub fn with_transformer<XN>(&self, new_transformer: &XN) -> RuleSetProcessor<T, P, F, XN, E, R, C, CC>
-        where XN : Transformer<T> + Clone
+        where XN : Transformer<T, C> + Clone
     {
         RuleSetProcessor::new(
             &self.parser,
@@ -204,7 +204,7 @@ impl<T,P,F,X,E,R,C> RuleSetSession<T,P,F,X,E,R,C> where
     T : Clone,
     P : Parser<T,C> + Clone,
     F : Filter<T> + Clone,
-    X : Transformer<T> + Clone,
+    X : Transformer<T, C> + Clone,
     E : Encoder<T> + Clone,
     R : Reporter<T, C> + Clone,
     C : Clone,
@@ -235,7 +235,7 @@ impl<T,P,F,X,E,R,C> PacketProcessingSession for RuleSetSession<T, P, F, X, E, R,
     T : Clone + Send + Sync,
     P : Parser<T,C> + Clone + Send + Sync,
     F : Filter<T> + Clone + Send + Sync,
-    X : Transformer<T> + Clone + Send + Sync,
+    X : Transformer<T, C> + Clone + Send + Sync,
     E : Encoder<T> + Clone + Send + Sync,
     R : Reporter<T, C> + Clone + Send + Sync,
     C : Clone + Send + Sync,
@@ -249,7 +249,7 @@ impl<T,P,F,X,E,R,C> PacketProcessingSession for RuleSetSession<T, P, F, X, E, R,
         let parsed = self.parser.parse(packet, &mut self.context)?;
         self.reporter.report(&parsed, Direction::Forward, &self.context)?;
         if self.filter.filter(&parsed) {
-            let transformed = self.transformer.transform(&parsed)?;
+            let transformed = self.transformer.transform(&parsed, &self.context)?;
             let encoded = self.encoder.encode(&transformed)?;
             Ok(Some(encoded))
         } else {
@@ -341,8 +341,8 @@ impl<T> NoFilter<T> {
 pub struct NoTransform<T> {
     message_type: PhantomData<T>
 }
-impl<T> Transformer<T> for NoTransform<T> where T : Clone {
-    fn transform(&self, message: &T) -> Result<T> {
+impl<T, C> Transformer<T, C> for NoTransform<T> where T : Clone {
+    fn transform(&self, message: &T, _context: &C) -> Result<T> {
         Ok(message.clone())
     }
 }

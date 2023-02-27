@@ -233,8 +233,8 @@ impl AppendDbNameTransformer {
         AppendDbNameTransformer { append: append.into() }
     }
 }
-impl Transformer<PostgresqlPacket> for AppendDbNameTransformer {
-    fn transform(&self, packet: &PostgresqlPacket) -> Result<PostgresqlPacket> {
+impl<C> Transformer<PostgresqlPacket, C> for AppendDbNameTransformer {
+    fn transform(&self, packet: &PostgresqlPacket, _context: &C) -> Result<PostgresqlPacket> {
         if let PostgresqlPacketInfo::Startup(message) = &packet.info {
             let dbname = message.get_parameter("database")
                 .ok_or_else(|| anyhow!("Database name missing from startup message"))?;

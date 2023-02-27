@@ -11,7 +11,6 @@ use log::{warn, info};
 use prew::{RewriteReverseProxy, PacketRules, RuleSetProcessor, NoFilter, MessageEncoder};
 use prew::{PostgresParser, AppendDbNameTransformer, NoReport, NoTransform, PacketProcessor};
 use prew::rule::{DefaultContext};
-// use prew::{Parser, Filter, Transformer, Encoder, Reporter};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AppendInfo {
