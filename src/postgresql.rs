@@ -318,7 +318,7 @@ impl<T> PacketTransformer for IdentityTransformer<T> where T : Clone {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct QueryMessage {
-    query: String,
+    pub query: String,
 }
 
 impl QueryMessage {
