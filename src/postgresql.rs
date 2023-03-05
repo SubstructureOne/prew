@@ -4,7 +4,7 @@ use std::ops::Deref;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use pg_query::NodeMut;
 use postgres_types::ToSql;
 use serde::{Serialize};
@@ -50,15 +50,23 @@ impl<C> Parser<PostgresqlPacket,C> for PostgresParser where C : WithAuthenticati
                 info = PostgresqlPacketInfo::Other;
             }
         } else {
-            if packet.bytes.len() >= 8
-                && BigEndian::read_u32(&packet.bytes[4..8]) == 196_608
-            {
-                let msg = StartupMessage::new(&packet.bytes);
-                if let Some(username) = msg.get_parameter("user") {
-                    let mut auth_guard = context.authinfo();
-                    (*auth_guard).username = Some(username);
+            if packet.bytes.len() >= 8 {
+                let code = BigEndian::read_u32(&packet.bytes[4..8]);
+                if code == 196_608 {
+                    let msg = StartupMessage::new(&packet.bytes);
+                    if let Some(username) = msg.get_parameter("user") {
+                        let mut auth_guard = context.authinfo();
+                        (*auth_guard).username = Some(username);
+                    }
+                    info = PostgresqlPacketInfo::Startup(msg);
+                } else if code == 80877103 {
+                    // SSL request code
+                    warn!("Client attempting to connect with an SSL handshake (not supported)");
+                    info = PostgresqlPacketInfo::SslRequest;
+                } else {
+                    warn!("Unrecognized message code: {}", code);
+                    info = PostgresqlPacketInfo::Other;
                 }
-                info = PostgresqlPacketInfo::Startup(msg);
             } else {
                 info = PostgresqlPacketInfo::Other
             }
@@ -366,6 +374,7 @@ pub enum PostgresqlPacketInfo {
     Startup(StartupMessage),
     Query(QueryMessage),
     Authentication(AuthenticationMessage),
+    SslRequest,
     Other,
 }
 
@@ -385,7 +394,7 @@ impl PostgresqlPacketType {
             PostgresqlPacketInfo::Startup(_) => PostgresqlPacketType::Startup,
             PostgresqlPacketInfo::Query(_) => PostgresqlPacketType::Query,
             PostgresqlPacketInfo::Authentication(_) => PostgresqlPacketType::Auth,
-            PostgresqlPacketInfo::Other => PostgresqlPacketType::Other,
+            _ => PostgresqlPacketType::Other,
         }
     }
 }
@@ -411,6 +420,7 @@ impl Encodable for PostgresqlPacket {
                 PostgresqlPacketInfo::Startup(message) => message.encode(),
                 PostgresqlPacketInfo::Query(message) => message.encode(),
                 PostgresqlPacketInfo::Authentication(message) => message.encode(),
+                PostgresqlPacketInfo::SslRequest => Err(anyhow!("Cannot encode SslRequest message")),
                 PostgresqlPacketInfo::Other => Err(anyhow!("Cannot encode 'other' messages"))
             }
         }
