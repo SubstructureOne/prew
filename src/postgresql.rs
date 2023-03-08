@@ -4,7 +4,7 @@ use std::ops::Deref;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
-use log::{debug, trace, warn};
+use log::{debug, info, trace, warn};
 use pg_query::NodeMut;
 use postgres_types::ToSql;
 use serde::{Serialize};
@@ -40,10 +40,10 @@ impl<C> Parser<PostgresqlPacket,C> for PostgresParser where C : WithAuthenticati
                 info = PostgresqlPacketInfo::Query(QueryMessage::new(&packet.bytes))
             } else if packet_type == 'R' {
                 if packet.bytes.len() >= 8 && BigEndian::read_u32(&packet.bytes[1..5]) == 8 && BigEndian::read_u32(&packet.bytes[5..9]) == 0 {
-                    trace!("Authentication OK");
                     info = PostgresqlPacketInfo::Authentication(AuthenticationMessage::AuthenticationOk);
                     let mut auth_guard = context.authinfo();
                     (*auth_guard).authenticated = true;
+                    trace!("Authentication OK (username: {})", auth_guard.username.as_ref().unwrap());
                 } else {
                     info = PostgresqlPacketInfo::Authentication(AuthenticationMessage::Other);
                 }
@@ -57,7 +57,10 @@ impl<C> Parser<PostgresqlPacket,C> for PostgresParser where C : WithAuthenticati
                     let msg = StartupMessage::new(&packet.bytes);
                     if let Some(username) = msg.get_parameter("user") {
                         let mut auth_guard = context.authinfo();
+                        info!("User is logging in as {}", &username);
                         (*auth_guard).username = Some(username);
+                    } else {
+                        warn!("No username found in connection string");
                     }
                     info = PostgresqlPacketInfo::Startup(msg);
                 } else if code == 80877103 {

@@ -38,6 +38,7 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
 
     pub async fn run(
         &mut self,
+        session: &Arc<Mutex<dyn PacketProcessingSession + Send>>,
     ) -> Result<()> {
         trace!("[{}]: Running {:?} pipe loop...", self.name, self.direction);
         //let source = Arc::get_mut(&mut self.source).unwrap();
@@ -45,11 +46,6 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
         let mut read_buf: Vec<u8> = vec![0_u8; 4096];
         let mut packet_buf: Vec<u8> = Vec::with_capacity(4096);
         let mut write_buf: Vec<u8> = Vec::with_capacity(4096);
-
-        let session = {
-            let handler = self.packet_handler.lock().await;
-            handler.start_session()
-        };
 
         loop {
             let read_result = self.source.read(&mut read_buf[..]).await?;
@@ -78,8 +74,6 @@ impl<T: AsyncReadExt + Unpin, U: AsyncWriteExt + Unpin> Pipe<T, U> {
         read_buf: &[u8],
         mut packet_buf: &mut Vec<u8>,
         write_buf: &mut Vec<u8>,
-        // context: &Box<dyn SessionContext>,
-        // other_pipe_sender: &mut Sender<Packet>,
     ) -> Result<()> {
         if n == 0 {
             return Err(anyhow!("Read {} bytes, closing pipe.", n));

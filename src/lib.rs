@@ -77,6 +77,10 @@ impl RewriteReverseProxy {
                 "Server.create_pipes: Spawning new task to manage connection from {}",
                 client_addr
             );
+            let session = {
+                let handler = handler_ref.lock().await;
+                handler.start_session()
+            };
             // Create new connections to the server for each client socket
             let mut server_socket = TcpStream::connect(db_addr.clone())
                 .await
@@ -103,10 +107,10 @@ impl RewriteReverseProxy {
             // - pipes are infinite loops, and never expect to exit unless error
             // - any return will close this connection
             select! {
-                result = forward_pipe.run().fuse() => {
+                result = forward_pipe.run(&session).fuse() => {
                     trace!("Pipe closed via forward pipe: {:?}", result);
                 },
-                result = backward_pipe.run().fuse() => {
+                result = backward_pipe.run(&session).fuse() => {
                     trace!("Pipe closed via backward pipe: {:?}", result);
                 },
                 // msg = kill_switch_receiver.fuse() => {
