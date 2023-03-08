@@ -39,7 +39,8 @@ impl<C> Parser<PostgresqlPacket,C> for PostgresParser where C : WithAuthenticati
             if packet_type == 'Q' {
                 info = PostgresqlPacketInfo::Query(QueryMessage::new(&packet.bytes))
             } else if packet_type == 'R' {
-                if packet.bytes.len() == 8 && BigEndian::read_u32(&packet.bytes[5..9]) == 0 {
+                if packet.bytes.len() >= 8 && BigEndian::read_u32(&packet.bytes[1..5]) == 8 && BigEndian::read_u32(&packet.bytes[5..9]) == 0 {
+                    trace!("Authentication OK");
                     info = PostgresqlPacketInfo::Authentication(AuthenticationMessage::AuthenticationOk);
                     let mut auth_guard = context.authinfo();
                     (*auth_guard).authenticated = true;
