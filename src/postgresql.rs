@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
 use log::{debug, info, trace, warn};
-use pg_query::NodeMut;
+use pg_query::{NodeEnum, NodeMut};
 use postgres_types::ToSql;
 use serde::{Serialize};
 
@@ -126,6 +126,39 @@ pub fn read_postgresql_packet(packet_buf: &mut Vec<u8>) -> Result<Option<Packet>
     )))
 }
 
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RowDescriptionField {
+    field_name: String,
+    table_oid: i32,
+    col_index: i16,
+    type_oid: i32,
+    col_length: i16,
+    type_mod: i16,
+    format_code: i16,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RowDescriptionMessage {
+    fields: Vec<RowDescriptionField>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DataColumn {
+    bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DataRowMessage {
+    columns: Vec<DataColumn>,
+}
+
+impl Encodable for DataRowMessage {
+    fn encode(&self) -> Result<Packet> {
+        todo!()
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct StartupMessage {
     // username: String,
@@ -172,7 +205,6 @@ impl Encodable for StartupMessage {
         Ok(Packet { bytes })
     }
 }
-
 
 impl StartupMessage {
     pub fn new(bytes: &Vec<u8>) -> StartupMessage {
@@ -290,8 +322,8 @@ impl<C> Transformer<PostgresqlPacket, C> for AppendDbNameTransformer {
                                 );
                                 (*dbinfo).dbname = new_dbname;
                                 modified = true;
-                            }
-                            _ => {}
+                            },
+                            _ => {},
                         }
                     }
                 }
@@ -379,6 +411,8 @@ pub enum PostgresqlPacketInfo {
     Query(QueryMessage),
     Authentication(AuthenticationMessage),
     SslRequest,
+    // RowDescription(RowDescriptionMessage),
+    DataRow(DataRowMessage),
     Other,
 }
 
@@ -424,9 +458,34 @@ impl Encodable for PostgresqlPacket {
                 PostgresqlPacketInfo::Startup(message) => message.encode(),
                 PostgresqlPacketInfo::Query(message) => message.encode(),
                 PostgresqlPacketInfo::Authentication(message) => message.encode(),
+                PostgresqlPacketInfo::DataRow(message) => message.encode(),
                 PostgresqlPacketInfo::SslRequest => Err(anyhow!("Cannot encode SslRequest message")),
                 PostgresqlPacketInfo::Other => Err(anyhow!("Cannot encode 'other' messages"))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::rule::{AuthenticationContext, DefaultContext};
+    use super::*;
+
+    #[test]
+    fn test_appender() -> Result<()> {
+        let xformer = AppendDbNameTransformer {append: "__test".to_string()};
+        let message = QueryMessage { query: "CREATE DATABASE mydatabase".to_string() };
+        let packet = PostgresqlPacket {bytes: Some(vec![]), info: PostgresqlPacketInfo::Query(message)};
+        let mut context = DefaultContext::new();
+        let result = xformer.transform(&packet, &context)?;
+        let parser = PostgresParser::new();
+        let packet = result.encode()?;
+        let parsed = parser.parse(&packet, &mut context)?;
+        if let PostgresqlPacketInfo::Query(message) = parsed.info {
+            assert_eq!(message.query, "CREATE DATABASE mydatabase__test");
+        } else {
+            return Err(anyhow!("Not a query message"));
+        }
+        Ok(())
     }
 }
