@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
 use log::{debug, info, trace, warn};
-use pg_query::{NodeEnum, NodeMut};
+use pg_query::{NodeMut};
 use postgres_types::ToSql;
 use serde::{Serialize};
 
@@ -37,7 +37,7 @@ impl<C> Parser<PostgresqlPacket,C> for PostgresParser where C : WithAuthenticati
         let info;
         if POSTGRES_IDS.contains(&packet_type) {
             if packet_type == 'Q' {
-                info = PostgresqlPacketInfo::Query(QueryMessage::new(&packet.bytes))
+                info = PostgresqlPacketInfo::Query(QueryMessage::new(&packet.bytes));
             } else if packet_type == 'R' {
                 if packet.bytes.len() >= 8 && BigEndian::read_u32(&packet.bytes[1..5]) == 8 && BigEndian::read_u32(&packet.bytes[5..9]) == 0 {
                     info = PostgresqlPacketInfo::Authentication(AuthenticationMessage::AuthenticationOk);
@@ -47,6 +47,8 @@ impl<C> Parser<PostgresqlPacket,C> for PostgresParser where C : WithAuthenticati
                 } else {
                     info = PostgresqlPacketInfo::Authentication(AuthenticationMessage::Other);
                 }
+            } else if packet_type == 'D' {
+                info = PostgresqlPacketInfo::DataRow(DataRowMessage::new(&packet.bytes)?);
             } else {
                 info = PostgresqlPacketInfo::Other;
             }
@@ -147,15 +149,53 @@ pub struct RowDescriptionMessage {
 pub struct DataColumn {
     bytes: Vec<u8>,
 }
+impl DataColumn {
+    pub fn new(bytes: &[u8]) -> DataColumn {
+        DataColumn { bytes: Vec::from(bytes) }
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DataRowMessage {
     columns: Vec<DataColumn>,
 }
 
+
+impl DataRowMessage {
+    pub fn new(bytes: &Vec<u8>) -> Result<DataRowMessage> {
+        let message_type = bytes[0] as char;
+        if message_type != 'D' {
+            return Err(anyhow!("Message type D expected for DataRow"));
+        }
+        let _length = BigEndian::read_u32(&bytes[1..5]);
+        let num_cols = BigEndian::read_u16(&bytes[5..7]);
+        let mut columns = vec![];
+        let mut offset = 7;
+        for _ind in 0..num_cols {
+            let col_length = BigEndian::read_i32(&bytes[offset..offset+4]);
+            offset += 4;
+            if col_length >= 0 {
+                let column = DataColumn::new(&bytes[offset..offset + col_length as usize].to_vec());
+                columns.push(column);
+                offset += col_length as usize;
+            }
+        }
+        Ok(DataRowMessage { columns })
+    }
+}
+
 impl Encodable for DataRowMessage {
     fn encode(&self) -> Result<Packet> {
-        todo!()
+        let mut bytes = vec![];
+        bytes.push('D' as u8);
+        let total_len = self.columns.iter().map(|column| column.bytes.len()).sum::<usize>();
+        bytes.extend((total_len as u32).to_be_bytes());
+        bytes.extend((self.columns.len() as u32).to_be_bytes());
+        for column in &self.columns {
+            bytes.extend((column.bytes.len() as u32).to_be_bytes());
+            bytes.extend(&column.bytes);
+        }
+        Ok(Packet { bytes })
     }
 }
 
@@ -264,6 +304,51 @@ impl StartupMessage {
             self.parameters[index].1 = value;
         } else {
             self.parameters.push((name.to_string(), value));
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RemoveSuffixTransformer {
+    suffix: String
+}
+
+impl RemoveSuffixTransformer {
+    pub fn new<S: Into<String>>(suffix: S) -> RemoveSuffixTransformer {
+        RemoveSuffixTransformer { suffix: suffix.into() }
+    }
+    fn modify_column(&self, column: &DataColumn) -> DataColumn {
+        let bytes = &column.bytes;
+        if bytes.len() >= self.suffix.len() && bytes[bytes.len() - self.suffix.len()..].eq(&self.suffix) {
+            DataColumn { bytes: Vec::from(bytes[..bytes.len() - self.suffix.len()]) }
+        } else {
+            DataColumn { bytes: Vec::from(bytes) }
+        }
+    }
+}
+impl<C> Transformer<PostgresqlPacket, C> for RemoveSuffixTransformer {
+    fn transform(&self, packet: &PostgresqlPacket, context: &C) -> Result<PostgresqlPacket> {
+        let offset = self.suffix.len() as i32;
+        if let PostgresqlPacketInfo::DataRow(message) = &packet.info {
+            let mut modify = false;
+            for column in &message.columns {
+                if column.bytes.len() >= self.suffix.len() {
+                    if column.bytes[column.bytes.len() - offset..].eq(&self.suffix) {
+                        modify = true;
+                        break;
+                    }
+                }
+            }
+            if modify {
+                let new_columns = message.columns.iter().map(|column| self.modify_column(&column)).collect();
+                let modified = DataRowMessage { columns: new_columns };
+                let info = PostgresqlPacketInfo::DataRow(modified);
+                Ok(PostgresqlPacket::new(info, None))
+            } else {
+                Ok(packet.clone())
+            }
+        } else {
+            Ok(packet.clone())
         }
     }
 }
@@ -424,6 +509,7 @@ pub enum PostgresqlPacketType {
     Startup,
     Query,
     Auth,
+    DataRow,
     Other
 }
 impl PostgresqlPacketType {
@@ -432,6 +518,7 @@ impl PostgresqlPacketType {
             PostgresqlPacketInfo::Startup(_) => PostgresqlPacketType::Startup,
             PostgresqlPacketInfo::Query(_) => PostgresqlPacketType::Query,
             PostgresqlPacketInfo::Authentication(_) => PostgresqlPacketType::Auth,
+            PostgresqlPacketInfo::DataRow(_) => PostgresqlPacketType::DataRow,
             _ => PostgresqlPacketType::Other,
         }
     }
