@@ -96,6 +96,7 @@ async fn main() -> Result<()>{
             &PostgresParser::new(),
             &NoFilter::new(),
             &AppendDbNameTransformer::new(appendinfo.append),
+            &NoTransform::new(),
             &MessageEncoder::new(),
             &NoReport::new(),
             &DefaultContext::new
@@ -105,6 +106,7 @@ async fn main() -> Result<()>{
         let rules = RuleSetProcessor::new(
             &PostgresParser::new(),
             &NoFilter::new(),
+            &NoTransform::new(),
             &NoTransform::new(),
             &MessageEncoder::new(),
             &NoReport::new(),
