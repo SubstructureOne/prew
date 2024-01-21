@@ -48,7 +48,7 @@ impl<C> Parser<PostgresqlPacket,C> for PostgresParser where C : WithAuthenticati
                     info = PostgresqlPacketInfo::Authentication(AuthenticationMessage::Other);
                 }
             } else if packet_type == 'D' {
-                info = PostgresqlPacketInfo::DataRow(DataRowMessage::new(&packet.bytes)?);
+                info = PostgresqlPacketInfo::DataRow(DataRowMessage::from_bytes(&packet.bytes)?);
             } else {
                 info = PostgresqlPacketInfo::Other;
             }
@@ -162,7 +162,11 @@ pub struct DataRowMessage {
 
 
 impl DataRowMessage {
-    pub fn new(bytes: &Vec<u8>) -> Result<DataRowMessage> {
+    pub fn new(columns: Vec<DataColumn>) -> DataRowMessage {
+        DataRowMessage { columns }
+    }
+
+    pub fn from_bytes(bytes: &Vec<u8>) -> Result<DataRowMessage> {
         let message_type = bytes[0] as char;
         if message_type != 'D' {
             return Err(anyhow!("Message type D expected for DataRow"));
@@ -310,25 +314,25 @@ impl StartupMessage {
 
 #[derive(Clone, Debug)]
 pub struct RemoveSuffixTransformer {
-    suffix: String
+    suffix: Vec<u8>
 }
 
 impl RemoveSuffixTransformer {
     pub fn new<S: Into<String>>(suffix: S) -> RemoveSuffixTransformer {
-        RemoveSuffixTransformer { suffix: suffix.into() }
+        RemoveSuffixTransformer { suffix: suffix.into().into_bytes() }
     }
     fn modify_column(&self, column: &DataColumn) -> DataColumn {
         let bytes = &column.bytes;
         if bytes.len() >= self.suffix.len() && bytes[bytes.len() - self.suffix.len()..].eq(&self.suffix) {
-            DataColumn { bytes: Vec::from(bytes[..bytes.len() - self.suffix.len()]) }
+            DataColumn { bytes: Vec::from(&bytes[..bytes.len() - self.suffix.len()]) }
         } else {
-            DataColumn { bytes: Vec::from(bytes) }
+            DataColumn { bytes: bytes.clone() }
         }
     }
 }
 impl<C> Transformer<PostgresqlPacket, C> for RemoveSuffixTransformer {
     fn transform(&self, packet: &PostgresqlPacket, context: &C) -> Result<PostgresqlPacket> {
-        let offset = self.suffix.len() as i32;
+        let offset = self.suffix.len();
         if let PostgresqlPacketInfo::DataRow(message) = &packet.info {
             let mut modify = false;
             for column in &message.columns {
@@ -574,5 +578,12 @@ mod tests {
             return Err(anyhow!("Not a query message"));
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_suffix_remover() -> Result<()> {
+        let xformer = RemoveSuffixTransformer::new("__test");
+        // let column = DataColumn::new();
+        // let origmessage = DataRowMessage::new(columns);
     }
 }
