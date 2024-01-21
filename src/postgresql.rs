@@ -150,8 +150,8 @@ pub struct DataColumn {
     bytes: Vec<u8>,
 }
 impl DataColumn {
-    pub fn new(bytes: &[u8]) -> DataColumn {
-        DataColumn { bytes: Vec::from(bytes) }
+    pub fn new(bytes: Vec<u8>) -> DataColumn {
+        DataColumn { bytes }
     }
 }
 
@@ -179,7 +179,7 @@ impl DataRowMessage {
             let col_length = BigEndian::read_i32(&bytes[offset..offset+4]);
             offset += 4;
             if col_length >= 0 {
-                let column = DataColumn::new(&bytes[offset..offset + col_length as usize].to_vec());
+                let column = DataColumn::new(Vec::from(&bytes[offset..offset + col_length as usize]));
                 columns.push(column);
                 offset += col_length as usize;
             }
@@ -559,7 +559,7 @@ impl Encodable for PostgresqlPacket {
 
 #[cfg(test)]
 mod tests {
-    use crate::rule::{AuthenticationContext, DefaultContext};
+    use crate::rule::{DefaultContext};
     use super::*;
 
     #[test]
@@ -583,7 +583,24 @@ mod tests {
     #[test]
     fn test_suffix_remover() -> Result<()> {
         let xformer = RemoveSuffixTransformer::new("__test");
-        // let column = DataColumn::new();
-        // let origmessage = DataRowMessage::new(columns);
+        let columns = vec![
+            DataColumn::new("myvalue__test".to_string().into_bytes()),
+            DataColumn::new("myothervalue".to_string().into_bytes()),
+        ];
+        let origmessage = DataRowMessage::new(columns);
+        let packet = PostgresqlPacket::new(
+            PostgresqlPacketInfo::DataRow(origmessage),
+            None,
+        );
+        let context = DefaultContext::new();
+        let result = xformer.transform(&packet, &context)?;
+        if let PostgresqlPacketInfo::DataRow(newmessage) = result.info {
+            assert_eq!(newmessage.columns.len(), 2);
+            assert_eq!(newmessage.columns[0].bytes, "myvalue".to_string().into_bytes());
+            assert_eq!(newmessage.columns[1].bytes, "myothervalue".to_string().into_bytes());
+        } else {
+            return Err(anyhow!("Not a DataRow message"));
+        }
+        Ok(())
     }
 }
