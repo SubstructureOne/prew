@@ -147,7 +147,7 @@ pub struct RowDescriptionMessage {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DataColumn {
-    bytes: Vec<u8>,
+    pub bytes: Vec<u8>,
 }
 impl DataColumn {
     pub fn new(bytes: Vec<u8>) -> DataColumn {
@@ -157,7 +157,7 @@ impl DataColumn {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DataRowMessage {
-    columns: Vec<DataColumn>,
+    pub columns: Vec<DataColumn>,
 }
 
 
