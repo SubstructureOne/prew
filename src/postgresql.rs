@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ByteOrder};
 use log::{debug, info, trace, warn};
-use pg_query::NodeMut;
+use pg_query::{NodeMut};
 use postgres_types::ToSql;
 use serde::{Serialize};
 
@@ -37,7 +37,7 @@ impl<C> Parser<PostgresqlPacket,C> for PostgresParser where C : WithAuthenticati
         let info;
         if POSTGRES_IDS.contains(&packet_type) {
             if packet_type == 'Q' {
-                info = PostgresqlPacketInfo::Query(QueryMessage::new(&packet.bytes))
+                info = PostgresqlPacketInfo::Query(QueryMessage::new(&packet.bytes));
             } else if packet_type == 'R' {
                 if packet.bytes.len() >= 8 && BigEndian::read_u32(&packet.bytes[1..5]) == 8 && BigEndian::read_u32(&packet.bytes[5..9]) == 0 {
                     info = PostgresqlPacketInfo::Authentication(AuthenticationMessage::AuthenticationOk);
@@ -47,6 +47,8 @@ impl<C> Parser<PostgresqlPacket,C> for PostgresParser where C : WithAuthenticati
                 } else {
                     info = PostgresqlPacketInfo::Authentication(AuthenticationMessage::Other);
                 }
+            } else if packet_type == 'D' {
+                info = PostgresqlPacketInfo::DataRow(DataRowMessage::from_bytes(&packet.bytes)?);
             } else {
                 info = PostgresqlPacketInfo::Other;
             }
@@ -126,6 +128,81 @@ pub fn read_postgresql_packet(packet_buf: &mut Vec<u8>) -> Result<Option<Packet>
     )))
 }
 
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RowDescriptionField {
+    field_name: String,
+    table_oid: i32,
+    col_index: i16,
+    type_oid: i32,
+    col_length: i16,
+    type_mod: i16,
+    format_code: i16,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RowDescriptionMessage {
+    fields: Vec<RowDescriptionField>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DataColumn {
+    bytes: Vec<u8>,
+}
+impl DataColumn {
+    pub fn new(bytes: Vec<u8>) -> DataColumn {
+        DataColumn { bytes }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DataRowMessage {
+    columns: Vec<DataColumn>,
+}
+
+
+impl DataRowMessage {
+    pub fn new(columns: Vec<DataColumn>) -> DataRowMessage {
+        DataRowMessage { columns }
+    }
+
+    pub fn from_bytes(bytes: &Vec<u8>) -> Result<DataRowMessage> {
+        let message_type = bytes[0] as char;
+        if message_type != 'D' {
+            return Err(anyhow!("Message type D expected for DataRow"));
+        }
+        let _length = BigEndian::read_u32(&bytes[1..5]);
+        let num_cols = BigEndian::read_u16(&bytes[5..7]);
+        let mut columns = vec![];
+        let mut offset = 7;
+        for _ind in 0..num_cols {
+            let col_length = BigEndian::read_i32(&bytes[offset..offset+4]);
+            offset += 4;
+            if col_length >= 0 {
+                let column = DataColumn::new(Vec::from(&bytes[offset..offset + col_length as usize]));
+                columns.push(column);
+                offset += col_length as usize;
+            }
+        }
+        Ok(DataRowMessage { columns })
+    }
+}
+
+impl Encodable for DataRowMessage {
+    fn encode(&self) -> Result<Packet> {
+        let mut bytes = vec![];
+        bytes.push('D' as u8);
+        let total_len = self.columns.iter().map(|column| column.bytes.len()).sum::<usize>();
+        bytes.extend((total_len as u32).to_be_bytes());
+        bytes.extend((self.columns.len() as u32).to_be_bytes());
+        for column in &self.columns {
+            bytes.extend((column.bytes.len() as u32).to_be_bytes());
+            bytes.extend(&column.bytes);
+        }
+        Ok(Packet { bytes })
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct StartupMessage {
     // username: String,
@@ -172,7 +249,6 @@ impl Encodable for StartupMessage {
         Ok(Packet { bytes })
     }
 }
-
 
 impl StartupMessage {
     pub fn new(bytes: &Vec<u8>) -> StartupMessage {
@@ -236,6 +312,51 @@ impl StartupMessage {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct RemoveSuffixTransformer {
+    suffix: Vec<u8>
+}
+
+impl RemoveSuffixTransformer {
+    pub fn new<S: Into<String>>(suffix: S) -> RemoveSuffixTransformer {
+        RemoveSuffixTransformer { suffix: suffix.into().into_bytes() }
+    }
+    fn modify_column(&self, column: &DataColumn) -> DataColumn {
+        let bytes = &column.bytes;
+        if bytes.len() >= self.suffix.len() && bytes[bytes.len() - self.suffix.len()..].eq(&self.suffix) {
+            DataColumn { bytes: Vec::from(&bytes[..bytes.len() - self.suffix.len()]) }
+        } else {
+            DataColumn { bytes: bytes.clone() }
+        }
+    }
+}
+impl<C> Transformer<PostgresqlPacket, C> for RemoveSuffixTransformer {
+    fn transform(&self, packet: &PostgresqlPacket, context: &C) -> Result<PostgresqlPacket> {
+        let offset = self.suffix.len();
+        if let PostgresqlPacketInfo::DataRow(message) = &packet.info {
+            let mut modify = false;
+            for column in &message.columns {
+                if column.bytes.len() >= self.suffix.len() {
+                    if column.bytes[column.bytes.len() - offset..].eq(&self.suffix) {
+                        modify = true;
+                        break;
+                    }
+                }
+            }
+            if modify {
+                let new_columns = message.columns.iter().map(|column| self.modify_column(&column)).collect();
+                let modified = DataRowMessage { columns: new_columns };
+                let info = PostgresqlPacketInfo::DataRow(modified);
+                Ok(PostgresqlPacket::new(info, None))
+            } else {
+                Ok(packet.clone())
+            }
+        } else {
+            Ok(packet.clone())
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppendDbNameTransformer {
     append: String
@@ -290,8 +411,8 @@ impl<C> Transformer<PostgresqlPacket, C> for AppendDbNameTransformer {
                                 );
                                 (*dbinfo).dbname = new_dbname;
                                 modified = true;
-                            }
-                            _ => {}
+                            },
+                            _ => {},
                         }
                     }
                 }
@@ -379,6 +500,8 @@ pub enum PostgresqlPacketInfo {
     Query(QueryMessage),
     Authentication(AuthenticationMessage),
     SslRequest,
+    // RowDescription(RowDescriptionMessage),
+    DataRow(DataRowMessage),
     Other,
 }
 
@@ -390,6 +513,7 @@ pub enum PostgresqlPacketType {
     Startup,
     Query,
     Auth,
+    DataRow,
     Other
 }
 impl PostgresqlPacketType {
@@ -398,6 +522,7 @@ impl PostgresqlPacketType {
             PostgresqlPacketInfo::Startup(_) => PostgresqlPacketType::Startup,
             PostgresqlPacketInfo::Query(_) => PostgresqlPacketType::Query,
             PostgresqlPacketInfo::Authentication(_) => PostgresqlPacketType::Auth,
+            PostgresqlPacketInfo::DataRow(_) => PostgresqlPacketType::DataRow,
             _ => PostgresqlPacketType::Other,
         }
     }
@@ -424,9 +549,58 @@ impl Encodable for PostgresqlPacket {
                 PostgresqlPacketInfo::Startup(message) => message.encode(),
                 PostgresqlPacketInfo::Query(message) => message.encode(),
                 PostgresqlPacketInfo::Authentication(message) => message.encode(),
+                PostgresqlPacketInfo::DataRow(message) => message.encode(),
                 PostgresqlPacketInfo::SslRequest => Err(anyhow!("Cannot encode SslRequest message")),
                 PostgresqlPacketInfo::Other => Err(anyhow!("Cannot encode 'other' messages"))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::rule::{DefaultContext};
+    use super::*;
+
+    #[test]
+    fn test_appender() -> Result<()> {
+        let xformer = AppendDbNameTransformer {append: "__test".to_string()};
+        let message = QueryMessage { query: "CREATE DATABASE mydatabase".to_string() };
+        let packet = PostgresqlPacket {bytes: Some(vec![]), info: PostgresqlPacketInfo::Query(message)};
+        let mut context = DefaultContext::new();
+        let result = xformer.transform(&packet, &context)?;
+        let parser = PostgresParser::new();
+        let packet = result.encode()?;
+        let parsed = parser.parse(&packet, &mut context)?;
+        if let PostgresqlPacketInfo::Query(message) = parsed.info {
+            assert_eq!(message.query, "CREATE DATABASE mydatabase__test");
+        } else {
+            return Err(anyhow!("Not a query message"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_suffix_remover() -> Result<()> {
+        let xformer = RemoveSuffixTransformer::new("__test");
+        let columns = vec![
+            DataColumn::new("myvalue__test".to_string().into_bytes()),
+            DataColumn::new("myothervalue".to_string().into_bytes()),
+        ];
+        let origmessage = DataRowMessage::new(columns);
+        let packet = PostgresqlPacket::new(
+            PostgresqlPacketInfo::DataRow(origmessage),
+            None,
+        );
+        let context = DefaultContext::new();
+        let result = xformer.transform(&packet, &context)?;
+        if let PostgresqlPacketInfo::DataRow(newmessage) = result.info {
+            assert_eq!(newmessage.columns.len(), 2);
+            assert_eq!(newmessage.columns[0].bytes, "myvalue".to_string().into_bytes());
+            assert_eq!(newmessage.columns[1].bytes, "myothervalue".to_string().into_bytes());
+        } else {
+            return Err(anyhow!("Not a DataRow message"));
+        }
+        Ok(())
     }
 }
