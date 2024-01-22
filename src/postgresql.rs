@@ -331,7 +331,7 @@ impl RemoveSuffixTransformer {
     }
 }
 impl<C> Transformer<PostgresqlPacket, C> for RemoveSuffixTransformer {
-    fn transform(&self, packet: &PostgresqlPacket, context: &C) -> Result<PostgresqlPacket> {
+    fn transform(&self, packet: &PostgresqlPacket, _context: &C) -> Result<PostgresqlPacket> {
         let offset = self.suffix.len();
         if let PostgresqlPacketInfo::DataRow(message) = &packet.info {
             let mut modify = false;

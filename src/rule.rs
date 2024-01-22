@@ -274,12 +274,15 @@ impl<T,P,F,X,OX,E,R,C> PacketProcessingSession for RuleSetSession<T, P, F, X, OX
     }
 
     fn process_outgoing(&mut self, packet: &Packet) -> Result<Option<Packet>> {
+        let parsed = self.parser.parse(packet, &mut self.context)?;
         self.reporter.report(
             &self.parser.parse(packet, &mut self.context)?,
             Direction::Backward,
             &self.context
         )?;
-        Ok(Some(packet.clone()))
+        let transformed = self.out_transformer.transform(&parsed, &self.context)?;
+        let encoded = self.encoder.encode(&transformed)?;
+        Ok(Some(encoded))
     }
 }
 
