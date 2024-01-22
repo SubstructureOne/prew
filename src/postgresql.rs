@@ -192,7 +192,7 @@ impl Encodable for DataRowMessage {
     fn encode(&self) -> Result<Packet> {
         let mut bytes = vec![];
         bytes.push('D' as u8);
-        let total_len = self.columns.iter().map(|column| column.bytes.len()).sum::<usize>();
+        let total_len = 6 + self.columns.iter().map(|column| 4 + column.bytes.len()).sum::<usize>();
         bytes.extend((total_len as u32).to_be_bytes());
         bytes.extend((self.columns.len() as u32).to_be_bytes());
         for column in &self.columns {
